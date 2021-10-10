@@ -1,8 +1,14 @@
-use druid::{AppLauncher, WindowDesc, Widget, PlatformError};
-use druid::widget::Label;
+use druid::{AppLauncher, WindowDesc, Widget, PlatformError, ImageBuf};
+use druid::widget::{Label, Flex};
+
+mod image;
 
 fn build_ui() -> impl Widget<()> {
-    Label::new("Hello world")
+    let left_image = include_bytes!("./assets/left.png");
+    let right_image = include_bytes!("./assets/right.png");
+    Flex::row()
+        .with_flex_child(image::image(left_image), 1.0)
+        .with_flex_child(image::image(right_image), 1.0)
 }
 
 fn main() -> Result<(), PlatformError> {
