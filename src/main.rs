@@ -1,5 +1,5 @@
-use druid::{AppLauncher, WindowDesc, Widget, PlatformError, ImageBuf};
-use druid::widget::{Label, Flex};
+use druid::widget::Flex;
+use druid::{AppLauncher, PlatformError, Widget, WindowDesc};
 
 mod image;
 
