@@ -1,3 +1,4 @@
+#![windows_subsystem = "windows"]
 use druid::{AppLauncher, PlatformError, WindowDesc};
 
 mod data;
