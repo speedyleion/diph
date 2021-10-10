@@ -22,7 +22,7 @@ pub fn image(raw_data: &[u8]) -> Image {
 
     Image::new(image_buf)
         // set the fill strategy
-        .fill_mode(FillStrat::Fill)
+        .fill_mode(FillStrat::None)
         // set the interpolation mode
         .interpolation_mode(InterpolationMode::Bilinear)
 }

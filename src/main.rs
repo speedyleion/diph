@@ -1,18 +1,19 @@
-use druid::widget::Flex;
-use druid::{AppLauncher, PlatformError, Widget, WindowDesc};
+use druid::{AppLauncher, PlatformError, WindowDesc};
 
+mod data;
 mod image;
-
-fn build_ui() -> impl Widget<()> {
-    let left_image = include_bytes!("./assets/left.png");
-    let right_image = include_bytes!("./assets/right.png");
-    Flex::row()
-        .with_flex_child(image::image(left_image), 1.0)
-        .with_flex_child(image::image(right_image), 1.0)
-}
+mod image_diff;
+mod menu;
 
 fn main() -> Result<(), PlatformError> {
-    let window = WindowDesc::new(build_ui()).title("Literate Broccoli");
-    AppLauncher::with_window(window).launch(())?;
+    let window = WindowDesc::new(image_diff::build_ui())
+        .title("Literate Broccoli")
+        .menu(menu::build_menu);
+    let state = data::AppState {
+        foo: String::from("What"),
+    };
+    AppLauncher::with_window(window)
+        .launch(state)
+        .expect("Failed to launch.");
     Ok(())
 }
