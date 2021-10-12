@@ -1,5 +1,5 @@
 [package]
-name = "literate-broccoli"
+name = "diph"
 version = "0.1.0"
 edition = "2018"
 

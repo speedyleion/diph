@@ -1,7 +1,5 @@
-# literate-broccoli
+# diph
 A visual diff written in rust
-
-> The name has no meaning, github suggested it and I'm horrible at naming things.
 
 To be frank, I've never really been a GUI develepor and at the start of this project Rust + GUI frameworks is questionable.
 I wanted to play with some more Rust and I have need of a visual diff tool that supports images which allows copying one image to the other.
