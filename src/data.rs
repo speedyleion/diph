@@ -6,5 +6,6 @@ use druid::{Data, Lens};
 
 #[derive(Clone, Data, Default, Lens)]
 pub struct AppState {
-    pub foo: String,
+    pub left: Option<String>,
+    pub right: Option<String>,
 }

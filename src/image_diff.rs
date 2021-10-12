@@ -4,34 +4,28 @@
 //          https://www.boost.org/LICENSE_1_0.txt)
 
 use crate::data::AppState;
-use crate::image;
-use druid::widget::{CrossAxisAlignment, Flex, FlexParams, Label, SizedBox};
+use crate::image_box;
+use druid::widget::{CrossAxisAlignment, Flex, FlexParams, Label, SizedBox, Split};
 use druid::Widget;
 
-pub fn build_ui() -> impl Widget<AppState> {
-    let left_raw = include_bytes!("./assets/left.png");
-    let right_raw = include_bytes!("./assets/right.png");
-    let left = build_source_ui("./assets/left.png", left_raw);
-    let right = build_source_ui("./assets/right.png", right_raw);
-    let centered = FlexParams::new(1.0, CrossAxisAlignment::Center);
-    Flex::column()
-        .with_flex_child(
-            Flex::row()
-                .with_flex_child(left, centered)
-                .with_flex_child(right, centered),
-            centered,
-        )
-        .with_flex_child(build_diff_ui(), centered)
+pub fn build_ui(state: &AppState) -> impl Widget<AppState> {
+    let left = build_source_ui(&state.left);
+    let right = build_source_ui(&state.right);
+    let _centered = FlexParams::new(1.0, CrossAxisAlignment::Center);
+    Split::rows(Split::columns(left, right), build_diff_ui())
 }
 
-fn build_source_ui(name: &str, raw_data: &[u8]) -> impl Widget<AppState> {
-    let text = Label::new(name);
+fn build_source_ui(name: &Option<String>) -> impl Widget<AppState> {
+    let text = match name {
+        Some(name) => Label::new(name.as_str()),
+        None => Label::new("(empty)"),
+    };
     Flex::column()
         .with_child(text)
-        .with_flex_child(SizedBox::new(image::image(raw_data)).expand(), 1.0)
+        .with_flex_child(SizedBox::new(image_box::image(name)).expand(), 1.0)
 }
 
 fn build_diff_ui() -> impl Widget<AppState> {
     let raw_data = include_bytes!("./assets/diff.png");
-    SizedBox::new(image::image(raw_data)).expand()
+    SizedBox::new(image_box::image_from_raw(raw_data)).expand()
 }
