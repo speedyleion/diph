@@ -35,13 +35,11 @@ fn build_source_ui(name: &Option<String>) -> impl Widget<AppState> {
 
 fn build_diff_ui(left: &Option<String>, right: &Option<String>) -> impl Widget<AppState> {
     let image_buf = get_diff_image(left, right);
-    Image::new(image_buf).fill_mode(FillStrat::None)
+    Image::new(image_buf).fill_mode(FillStrat::None).scroll().center()
 }
 
 fn get_image_from_file(name: &Option<String>) -> RgbaImage {
     match name {
-        // Some(name) => ImageBuf::from_file(name).unwrap_or_else(|_| ImageBuf::empty()),
-        // Some(name) => ImageBuf::from_file(name).unwrap_or_else(|_| ImageBuf::empty()),
         Some(name) => ImageReader::open(name)
             .unwrap()
             .decode()
