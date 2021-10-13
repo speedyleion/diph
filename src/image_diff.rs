@@ -33,7 +33,7 @@ fn build_diff_ui() -> impl Widget<AppState> {
 
 fn image_from_file(name: &Option<String>) -> impl Widget<AppState> {
     let image_buf = match name {
-        Some(name) => ImageBuf::from_file(name).unwrap(),
+        Some(name) => ImageBuf::from_file(name).unwrap_or_else(|_| ImageBuf::empty()),
         None => ImageBuf::empty(),
     };
 
