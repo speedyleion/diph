@@ -4,9 +4,10 @@
 //          https://www.boost.org/LICENSE_1_0.txt)
 
 use crate::data::AppState;
-use crate::image_box;
-use druid::widget::{CrossAxisAlignment, Flex, FlexParams, Label, SizedBox, Split};
-use druid::Widget;
+use druid::widget::{
+    CrossAxisAlignment, FillStrat, Flex, FlexParams, Image, Label, Split, WidgetExt,
+};
+use druid::{ImageBuf, Widget};
 
 pub fn build_ui(state: &AppState) -> impl Widget<AppState> {
     let left = build_source_ui(&state.left);
@@ -22,10 +23,25 @@ fn build_source_ui(name: &Option<String>) -> impl Widget<AppState> {
     };
     Flex::column()
         .with_child(text)
-        .with_flex_child(SizedBox::new(image_box::image(name)).expand(), 1.0)
+        .with_flex_child(image_from_file(name).scroll().center(), 1.0)
 }
 
 fn build_diff_ui() -> impl Widget<AppState> {
     let raw_data = include_bytes!("./assets/diff.png");
-    SizedBox::new(image_box::image_from_raw(raw_data)).expand()
+    image_from_raw(raw_data).scroll().center()
+}
+
+fn image_from_file(name: &Option<String>) -> impl Widget<AppState> {
+    let image_buf = match name {
+        Some(name) => ImageBuf::from_file(name).unwrap(),
+        None => ImageBuf::empty(),
+    };
+
+    Image::new(image_buf).fill_mode(FillStrat::None)
+}
+
+fn image_from_raw(raw: &[u8]) -> impl Widget<AppState> {
+    let image_buf = ImageBuf::from_data(raw).unwrap();
+
+    Image::new(image_buf).fill_mode(FillStrat::None)
 }

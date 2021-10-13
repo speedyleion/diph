@@ -1,18 +1,24 @@
-#![windows_subsystem = "windows"]
+//          Copyright Nick G 2021.
+// Distributed under the Boost Software License, Version 1.0.
+//    (See accompanying file LICENSE or copy at
+//          https://www.boost.org/LICENSE_1_0.txt)
+
+// #![windows_subsystem = "windows"]
 use clap::{App, Arg};
 use druid::{AppLauncher, PlatformError, WindowDesc};
 
 mod data;
-mod image_box;
+mod delegate;
 mod image_diff;
 mod menu;
 
 fn main() -> Result<(), PlatformError> {
     let state = parse_cli()?;
     let window = WindowDesc::new(image_diff::build_ui(&state))
-        .title("Literate Broccoli")
+        .title("Diph")
         .menu(menu::build_menu);
     AppLauncher::with_window(window)
+        .delegate(delegate::Delegate)
         .launch(state)
         .expect("Failed to launch.");
     Ok(())
