@@ -4,13 +4,13 @@
 //          https://www.boost.org/LICENSE_1_0.txt)
 
 use crate::data::AppState;
+
+use crate::widgets::Image;
 use dify::diff::get_results;
 use druid::image::io::Reader as ImageReader;
 use druid::image::{DynamicImage, RgbaImage};
 use druid::piet::ImageFormat;
-use druid::widget::{
-    CrossAxisAlignment, FillStrat, Flex, FlexParams, Image, Label, Split, WidgetExt,
-};
+use druid::widget::{CrossAxisAlignment, Flex, FlexParams, Label, Split, WidgetExt};
 use druid::{ImageBuf, Widget};
 
 pub fn build_ui(state: &AppState) -> impl Widget<AppState> {
@@ -35,7 +35,7 @@ fn build_source_ui(name: &Option<String>) -> impl Widget<AppState> {
 
 fn build_diff_ui(left: &Option<String>, right: &Option<String>) -> impl Widget<AppState> {
     let image_buf = get_diff_image(left, right);
-    Image::new(image_buf).fill_mode(FillStrat::None).scroll().center()
+    Image::new(image_buf).scroll().center()
 }
 
 fn get_image_from_file(name: &Option<String>) -> RgbaImage {
@@ -82,5 +82,5 @@ fn image_from_file(name: &Option<String>) -> impl Widget<AppState> {
         None => ImageBuf::empty(),
     };
 
-    Image::new(image_buf).fill_mode(FillStrat::None)
+    Image::new(image_buf)
 }

@@ -11,6 +11,7 @@ mod data;
 mod delegate;
 mod image_diff;
 mod menu;
+mod widgets;
 
 fn main() -> Result<(), PlatformError> {
     let state = parse_cli()?;
