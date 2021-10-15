@@ -8,10 +8,11 @@ use crate::data::AppState;
 use crate::widgets::Image;
 use dify::diff::get_results;
 use druid::image::io::Reader as ImageReader;
-use druid::image::{DynamicImage, RgbaImage};
+use druid::image::{imageops, DynamicImage, ImageBuffer, Pixel, RgbaImage};
 use druid::piet::ImageFormat;
 use druid::widget::{CrossAxisAlignment, Flex, FlexParams, Label, Split, WidgetExt};
 use druid::{ImageBuf, Widget};
+use std::cmp::max;
 
 pub fn build_ui(state: &AppState) -> impl Widget<AppState> {
     let left = build_source_ui(&state.left);
@@ -39,18 +40,45 @@ fn build_diff_ui(left: &Option<String>, right: &Option<String>) -> impl Widget<A
 }
 
 fn get_image_from_file(name: &Option<String>) -> RgbaImage {
-    match name {
-        Some(name) => ImageReader::open(name)
-            .unwrap()
-            .decode()
-            .unwrap()
-            .to_rgba8(),
-        None => DynamicImage::new_rgba8(1, 1).to_rgba8(),
+    // TODO get some tests here for the failure cases and pass back the message string to
+    // replace the file name in the UI for the user
+    let name = match name {
+        None => return DynamicImage::new_rgba8(1, 1).to_rgba8(),
+        Some(name) => name,
+    };
+
+    let image_file = match ImageReader::open(name) {
+        Ok(image_file) => image_file,
+        Err(_) => return DynamicImage::new_rgba8(1, 1).to_rgba8(),
+    };
+
+    match image_file.decode() {
+        Ok(image) => image.to_rgba8(),
+        Err(_) => DynamicImage::new_rgba8(1, 1).to_rgba8(),
     }
 }
+
 fn get_diff_image(left: &Option<String>, right: &Option<String>) -> ImageBuf {
     let left_image = get_image_from_file(left);
     let right_image = get_image_from_file(right);
+
+    let (left_width, left_height) = left_image.dimensions();
+    let (right_width, right_height) = right_image.dimensions();
+    let mut combined =
+        ImageBuffer::new(max(left_width, right_width), max(left_height, right_height));
+    imageops::overlay(&mut combined, &left_image, 0, 0);
+    imageops::overlay(&mut combined, &right_image, 0, 0);
+
+    let (width, height) = combined.dimensions();
+    let mut greyscale = ImageBuffer::new(width, height);
+
+    for y in 0..height {
+        for x in 0..width {
+            let p = combined.get_pixel(x, y).to_luma_alpha().to_rgba();
+            greyscale.put_pixel(x, y, p);
+        }
+    }
+
     let base = None;
     let block_out = None;
     let result = get_results(
@@ -62,18 +90,16 @@ fn get_diff_image(left: &Option<String>, right: &Option<String>) -> ImageBuf {
         &base,
         &block_out,
     );
-    match result {
-        None => ImageBuf::empty(),
-        Some((_, image)) => {
-            let size = image.dimensions();
-            ImageBuf::from_raw(
-                image.to_vec(),
-                ImageFormat::RgbaSeparate,
-                size.0 as usize,
-                size.1 as usize,
-            )
-        }
+    if let Some((_, image)) = result {
+        imageops::overlay(&mut greyscale, &image, 0, 0);
     }
+    let size = greyscale.dimensions();
+    ImageBuf::from_raw(
+        greyscale.to_vec(),
+        ImageFormat::RgbaSeparate,
+        size.0 as usize,
+        size.1 as usize,
+    )
 }
 
 fn image_from_file(name: &Option<String>) -> impl Widget<AppState> {
