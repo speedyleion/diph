@@ -6,6 +6,7 @@
 // #![windows_subsystem = "windows"]
 use clap::{App, Arg};
 use druid::{AppLauncher, PlatformError, WindowDesc};
+use std::sync::{Arc, Mutex};
 
 mod data;
 mod delegate;
@@ -34,6 +35,7 @@ fn parse_cli() -> Result<data::AppState, PlatformError> {
     let state = data::AppState {
         left: matches.value_of("LEFT").map(String::from),
         right: matches.value_of("RIGHT").map(String::from),
+        zoom: Arc::new(Mutex::new(1.)),
     };
     Ok(state)
 }

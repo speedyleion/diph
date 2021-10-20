@@ -4,4 +4,6 @@
 //          https://www.boost.org/LICENSE_1_0.txt)
 
 mod image;
+mod zoom;
 pub use self::image::Image;
+pub use self::zoom::Zoom;

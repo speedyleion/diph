@@ -5,7 +5,7 @@
 
 use crate::data::AppState;
 
-use crate::widgets::Image;
+use crate::widgets::{Image, Zoom};
 use dify::diff::get_results;
 use druid::image::io::Reader as ImageReader;
 use druid::image::{imageops, DynamicImage, ImageBuffer, Pixel, RgbaImage};
@@ -13,10 +13,11 @@ use druid::piet::ImageFormat;
 use druid::widget::{CrossAxisAlignment, Flex, FlexParams, Label, Split, WidgetExt};
 use druid::{ImageBuf, Widget};
 use std::cmp::max;
+use std::sync::Arc;
 
 pub fn build_ui(state: &AppState) -> impl Widget<AppState> {
-    let left = build_source_ui(&state.left);
-    let right = build_source_ui(&state.right);
+    let left = build_source_ui(&state.left, state);
+    let right = build_source_ui(&state.right, state);
     let _centered = FlexParams::new(1.0, CrossAxisAlignment::Center);
     Split::rows(
         Split::columns(left, right),
@@ -24,14 +25,17 @@ pub fn build_ui(state: &AppState) -> impl Widget<AppState> {
     )
 }
 
-fn build_source_ui(name: &Option<String>) -> impl Widget<AppState> {
+fn build_source_ui(name: &Option<String>, state: &AppState) -> impl Widget<AppState> {
     let text = match name {
         Some(name) => Label::new(name.as_str()),
         None => Label::new("(empty)"),
     };
-    Flex::column()
-        .with_child(text)
-        .with_flex_child(image_from_file(name).scroll().center(), 1.0)
+    Flex::column().with_child(text).with_flex_child(
+        Zoom::new(Arc::clone(&state.zoom), image_from_file(name))
+            .scroll()
+            .center(),
+        1.0,
+    )
 }
 
 fn build_diff_ui(left: &Option<String>, right: &Option<String>) -> impl Widget<AppState> {
