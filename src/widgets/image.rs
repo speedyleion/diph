@@ -3,11 +3,11 @@
 //    (See accompanying file LICENSE or copy at
 //          https://www.boost.org/LICENSE_1_0.txt)
 
-use druid::piet::{ImageFormat, InterpolationMode, PietImage};
+use druid::piet::{InterpolationMode, PietImage};
 use druid::widget::prelude::*;
 use druid::{
     Affine, BoxConstraints, Data, Env, Event, EventCtx, ImageBuf, LayoutCtx, LifeCycle,
-    LifeCycleCtx, PaintCtx, Rect, Size, UpdateCtx, Widget,
+    LifeCycleCtx, PaintCtx, Size, UpdateCtx, Widget,
 };
 
 pub struct Image {
@@ -72,50 +72,11 @@ impl<T: Data> Widget<T> for Image {
 
             ctx.clip(ctx_size.to_rect());
             ctx.transform(offset_matrix);
-            draw_background(ctx, image_size.to_rect());
             ctx.draw_image(
                 piet_image,
                 image_size.to_rect(),
                 InterpolationMode::NearestNeighbor,
             );
         });
-    }
-}
-
-fn draw_background(ctx: &mut PaintCtx, rect: Rect) {
-    // 40% and 60%
-    let dimension = 16;
-    let pixels = [
-        102, 102, 102, 102, 102, 102, 102, 102, 153, 153, 153, 153, 153, 153, 153, 153, 102, 102,
-        102, 102, 102, 102, 102, 102, 153, 153, 153, 153, 153, 153, 153, 153, 102, 102, 102, 102,
-        102, 102, 102, 102, 153, 153, 153, 153, 153, 153, 153, 153, 102, 102, 102, 102, 102, 102,
-        102, 102, 153, 153, 153, 153, 153, 153, 153, 153, 102, 102, 102, 102, 102, 102, 102, 102,
-        153, 153, 153, 153, 153, 153, 153, 153, 102, 102, 102, 102, 102, 102, 102, 102, 153, 153,
-        153, 153, 153, 153, 153, 153, 102, 102, 102, 102, 102, 102, 102, 102, 153, 153, 153, 153,
-        153, 153, 153, 153, 102, 102, 102, 102, 102, 102, 102, 102, 153, 153, 153, 153, 153, 153,
-        153, 153, 153, 153, 153, 153, 153, 153, 153, 153, 102, 102, 102, 102, 102, 102, 102, 102,
-        153, 153, 153, 153, 153, 153, 153, 153, 102, 102, 102, 102, 102, 102, 102, 102, 153, 153,
-        153, 153, 153, 153, 153, 153, 102, 102, 102, 102, 102, 102, 102, 102, 153, 153, 153, 153,
-        153, 153, 153, 153, 102, 102, 102, 102, 102, 102, 102, 102, 153, 153, 153, 153, 153, 153,
-        153, 153, 102, 102, 102, 102, 102, 102, 102, 102, 153, 153, 153, 153, 153, 153, 153, 153,
-        102, 102, 102, 102, 102, 102, 102, 102, 153, 153, 153, 153, 153, 153, 153, 153, 102, 102,
-        102, 102, 102, 102, 102, 102, 153, 153, 153, 153, 153, 153, 153, 153, 102, 102, 102, 102,
-        102, 102, 102, 102,
-    ];
-    let pattern = ctx
-        .make_image(dimension, dimension, &pixels, ImageFormat::Grayscale)
-        .unwrap();
-    ctx.clip(&rect);
-
-    let columns = (rect.width() as usize + (dimension - 1)) / dimension;
-    let rows = (rect.height() as usize + (dimension - 1)) / dimension;
-    for col in 0..columns {
-        let dimension_f64 = dimension as f64;
-        let x0 = col as f64 * dimension_f64;
-        for row in 0..rows {
-            let y0 = row as f64 * dimension_f64;
-            let rect = Rect::from_origin_size((x0, y0), (dimension_f64, dimension_f64));
-            ctx.draw_image(&pattern, rect, InterpolationMode::Bilinear);
-        }
     }
 }

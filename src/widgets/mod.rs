@@ -5,5 +5,7 @@
 
 mod image;
 mod zoom;
+mod zoom_controller;
 pub use self::image::Image;
 pub use self::zoom::Zoom;
+pub use self::zoom_controller::ZoomController;

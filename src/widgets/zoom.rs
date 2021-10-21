@@ -4,6 +4,7 @@
 //          https://www.boost.org/LICENSE_1_0.txt)
 
 use druid::debug_state::DebugState;
+
 use druid::widget::prelude::*;
 use druid::{Affine, Data, Size, WidgetPod};
 use std::ops::Mul;
@@ -26,15 +27,6 @@ impl<T> Zoom<T> {
 
 impl<T: Data> Widget<T> for Zoom<T> {
     fn event(&mut self, ctx: &mut EventCtx, event: &Event, data: &mut T, env: &Env) {
-        if let Event::Wheel(mouse) = event {
-            let mut zoom = mouse.wheel_delta.y;
-            if zoom < 0. {
-                zoom = 1. / -zoom;
-            }
-            let mut s_zoom = self.zoom.lock().unwrap();
-            *s_zoom *= zoom;
-            ctx.request_layout();
-        };
         self.child.event(ctx, event, data, env)
     }
 

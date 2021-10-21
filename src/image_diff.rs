@@ -5,13 +5,14 @@
 
 use crate::data::AppState;
 
-use crate::widgets::{Image, Zoom};
+use crate::widgets::{Image, Zoom, ZoomController};
 use dify::diff::get_results;
 use druid::image::io::Reader as ImageReader;
 use druid::image::{imageops, DynamicImage, ImageBuffer, Pixel, RgbaImage};
-use druid::piet::ImageFormat;
-use druid::widget::{CrossAxisAlignment, Flex, FlexParams, Label, Split, WidgetExt};
-use druid::{ImageBuf, Widget};
+use druid::piet::{ImageFormat, InterpolationMode};
+use druid::widget::prelude::*;
+use druid::widget::{CrossAxisAlignment, Flex, FlexParams, Label, Painter, Split, WidgetExt};
+use druid::{Env, ImageBuf, PaintCtx, Rect, Widget};
 use std::cmp::max;
 use std::sync::Arc;
 
@@ -19,10 +20,7 @@ pub fn build_ui(state: &AppState) -> impl Widget<AppState> {
     let left = build_source_ui(&state.left, state);
     let right = build_source_ui(&state.right, state);
     let _centered = FlexParams::new(1.0, CrossAxisAlignment::Center);
-    Split::rows(
-        Split::columns(left, right),
-        build_diff_ui(&state.left, &state.right),
-    )
+    Split::rows(Split::columns(left, right), build_diff_ui(state))
 }
 
 fn build_source_ui(name: &Option<String>, state: &AppState) -> impl Widget<AppState> {
@@ -33,14 +31,20 @@ fn build_source_ui(name: &Option<String>, state: &AppState) -> impl Widget<AppSt
     Flex::column().with_child(text).with_flex_child(
         Zoom::new(Arc::clone(&state.zoom), image_from_file(name))
             .scroll()
-            .center(),
+            .background(Painter::new(draw_background))
+            .center()
+            .controller(ZoomController::new(Arc::clone(&state.zoom))),
         1.0,
     )
 }
 
-fn build_diff_ui(left: &Option<String>, right: &Option<String>) -> impl Widget<AppState> {
-    let image_buf = get_diff_image(left, right);
-    Image::new(image_buf).scroll().center()
+fn build_diff_ui(state: &AppState) -> impl Widget<AppState> {
+    let image_buf = get_diff_image(&state.left, &state.right);
+    Zoom::new(Arc::clone(&state.zoom), Image::new(image_buf))
+        .scroll()
+        .background(Painter::new(draw_background))
+        .center()
+        .controller(ZoomController::new(Arc::clone(&state.zoom)))
 }
 
 fn get_image_from_file(name: &Option<String>) -> RgbaImage {
@@ -113,4 +117,43 @@ fn image_from_file(name: &Option<String>) -> impl Widget<AppState> {
     };
 
     Image::new(image_buf)
+}
+
+fn draw_background(ctx: &mut PaintCtx, _data: &AppState, _env: &Env) {
+    let rect = ctx.size().to_rect();
+    // 40% and 60%
+    let dimension = 16;
+    let pixels = [
+        102, 102, 102, 102, 102, 102, 102, 102, 153, 153, 153, 153, 153, 153, 153, 153, 102, 102,
+        102, 102, 102, 102, 102, 102, 153, 153, 153, 153, 153, 153, 153, 153, 102, 102, 102, 102,
+        102, 102, 102, 102, 153, 153, 153, 153, 153, 153, 153, 153, 102, 102, 102, 102, 102, 102,
+        102, 102, 153, 153, 153, 153, 153, 153, 153, 153, 102, 102, 102, 102, 102, 102, 102, 102,
+        153, 153, 153, 153, 153, 153, 153, 153, 102, 102, 102, 102, 102, 102, 102, 102, 153, 153,
+        153, 153, 153, 153, 153, 153, 102, 102, 102, 102, 102, 102, 102, 102, 153, 153, 153, 153,
+        153, 153, 153, 153, 102, 102, 102, 102, 102, 102, 102, 102, 153, 153, 153, 153, 153, 153,
+        153, 153, 153, 153, 153, 153, 153, 153, 153, 153, 102, 102, 102, 102, 102, 102, 102, 102,
+        153, 153, 153, 153, 153, 153, 153, 153, 102, 102, 102, 102, 102, 102, 102, 102, 153, 153,
+        153, 153, 153, 153, 153, 153, 102, 102, 102, 102, 102, 102, 102, 102, 153, 153, 153, 153,
+        153, 153, 153, 153, 102, 102, 102, 102, 102, 102, 102, 102, 153, 153, 153, 153, 153, 153,
+        153, 153, 102, 102, 102, 102, 102, 102, 102, 102, 153, 153, 153, 153, 153, 153, 153, 153,
+        102, 102, 102, 102, 102, 102, 102, 102, 153, 153, 153, 153, 153, 153, 153, 153, 102, 102,
+        102, 102, 102, 102, 102, 102, 153, 153, 153, 153, 153, 153, 153, 153, 102, 102, 102, 102,
+        102, 102, 102, 102,
+    ];
+    let pattern = ctx
+        .make_image(dimension, dimension, &pixels, ImageFormat::Grayscale)
+        .unwrap();
+    ctx.clip(&rect);
+
+    let columns = (rect.width() as usize + (dimension - 1)) / dimension;
+    let rows = (rect.height() as usize + (dimension - 1)) / dimension;
+    for col in 0..columns {
+        let dimension_f64 = dimension as f64;
+        let x0 = col as f64 * dimension_f64;
+        for row in 0..rows {
+            let y0 = row as f64 * dimension_f64;
+            let rect = Rect::from_origin_size((x0, y0), (dimension_f64, dimension_f64));
+            ctx.draw_image(&pattern, rect, InterpolationMode::Bilinear);
+        }
+    }
 }
