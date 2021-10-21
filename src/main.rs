@@ -5,7 +5,7 @@
 
 // #![windows_subsystem = "windows"]
 use clap::{App, Arg};
-use druid::{AppLauncher, PlatformError, WindowDesc};
+use druid::{AppLauncher, PlatformError, Vec2, WindowDesc};
 use std::sync::{Arc, Mutex};
 
 mod data;
@@ -36,6 +36,7 @@ fn parse_cli() -> Result<data::AppState, PlatformError> {
         left: matches.value_of("LEFT").map(String::from),
         right: matches.value_of("RIGHT").map(String::from),
         zoom: Arc::new(Mutex::new(1.)),
+        scroll_offset: Vec2::new(0., 0.),
     };
     Ok(state)
 }

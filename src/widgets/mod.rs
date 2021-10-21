@@ -4,8 +4,10 @@
 //          https://www.boost.org/LICENSE_1_0.txt)
 
 mod image;
+mod scroll_lock;
 mod zoom;
 mod zoom_controller;
 pub use self::image::Image;
+pub use self::scroll_lock::ScrollLock;
 pub use self::zoom::Zoom;
 pub use self::zoom_controller::ZoomController;

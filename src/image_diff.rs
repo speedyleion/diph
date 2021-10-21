@@ -5,7 +5,7 @@
 
 use crate::data::AppState;
 
-use crate::widgets::{Image, Zoom, ZoomController};
+use crate::widgets::{Image, ScrollLock, Zoom, ZoomController};
 use dify::diff::get_results;
 use druid::image::io::Reader as ImageReader;
 use druid::image::{imageops, DynamicImage, ImageBuffer, Pixel, RgbaImage};
@@ -29,8 +29,7 @@ fn build_source_ui(name: &Option<String>, state: &AppState) -> impl Widget<AppSt
         None => Label::new("(empty)"),
     };
     Flex::column().with_child(text).with_flex_child(
-        Zoom::new(Arc::clone(&state.zoom), image_from_file(name))
-            .scroll()
+        ScrollLock::new(Zoom::new(Arc::clone(&state.zoom), image_from_file(name)))
             .background(Painter::new(draw_background))
             .center()
             .controller(ZoomController::new(Arc::clone(&state.zoom))),
@@ -40,8 +39,7 @@ fn build_source_ui(name: &Option<String>, state: &AppState) -> impl Widget<AppSt
 
 fn build_diff_ui(state: &AppState) -> impl Widget<AppState> {
     let image_buf = get_diff_image(&state.left, &state.right);
-    Zoom::new(Arc::clone(&state.zoom), Image::new(image_buf))
-        .scroll()
+    ScrollLock::new(Zoom::new(Arc::clone(&state.zoom), Image::new(image_buf)))
         .background(Painter::new(draw_background))
         .center()
         .controller(ZoomController::new(Arc::clone(&state.zoom)))
