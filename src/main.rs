@@ -32,9 +32,17 @@ fn parse_cli() -> Result<data::AppState, PlatformError> {
         .arg(Arg::with_name("LEFT").help("Sets the left file to compare"))
         .arg(Arg::with_name("RIGHT").help("Sets the right file to compare"))
         .get_matches();
+    let left = matches
+        .value_of("LEFT")
+        .map(String::from)
+        .unwrap_or_else(|| "EMPTY".to_string());
+    let right = matches
+        .value_of("RIGHT")
+        .map(String::from)
+        .unwrap_or_else(|| "EMPTY".to_string());
     let state = data::AppState {
-        left: matches.value_of("LEFT").map(String::from),
-        right: matches.value_of("RIGHT").map(String::from),
+        left: data::ImagePreview::from_file(&left),
+        right: data::ImagePreview::from_file(&right),
         zoom: Arc::new(Mutex::new(1.)),
         scroll_offset: Vec2::new(0., 0.),
     };

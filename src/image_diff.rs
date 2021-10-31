@@ -3,7 +3,7 @@
 //    (See accompanying file LICENSE or copy at
 //          https://www.boost.org/LICENSE_1_0.txt)
 
-use crate::data::AppState;
+use crate::data::{AppState, ImagePreview};
 
 use crate::widgets::{Image, ScrollLock, Zoom, ZoomController};
 use dify::diff::get_results;
@@ -11,25 +11,55 @@ use druid::image::io::Reader as ImageReader;
 use druid::image::{imageops, DynamicImage, ImageBuffer, Pixel, RgbaImage};
 use druid::piet::{ImageFormat, InterpolationMode};
 use druid::widget::prelude::*;
-use druid::widget::{CrossAxisAlignment, Flex, FlexParams, Label, Painter, Split, WidgetExt};
+use druid::widget::{
+    Align, Click, ControllerHost, Flex, Label, Painter, Split, Svg, SvgData, WidgetExt,
+};
 use druid::{Env, ImageBuf, PaintCtx, Rect, Widget};
 use std::cmp::max;
+use std::str::FromStr;
 use std::sync::Arc;
 
 pub fn build_ui(state: &AppState) -> impl Widget<AppState> {
-    let left = build_source_ui(&state.left, state);
-    let right = build_source_ui(&state.right, state);
-    let _centered = FlexParams::new(1.0, CrossAxisAlignment::Center);
+    let left = build_left_source_ui(&state.left, state);
+    let right = build_right_source_ui(&state.right, state);
     Split::rows(Split::columns(left, right), build_diff_ui(state))
 }
 
-fn build_source_ui(name: &Option<String>, state: &AppState) -> impl Widget<AppState> {
-    let text = match name {
-        Some(name) => Label::new(name.as_str()),
-        None => Label::new("(empty)"),
-    };
-    Flex::column().with_child(text).with_flex_child(
-        ScrollLock::new(Zoom::new(Arc::clone(&state.zoom), image_from_file(name)))
+fn build_left_source_ui(image: &ImagePreview, state: &AppState) -> impl Widget<AppState> {
+    let text = build_filename(image);
+    let icon = include_str!("assets/right-arrow-button.svg");
+    let svg = Svg::new(SvgData::from_str(icon).unwrap());
+    let button = ControllerHost::new(
+        svg,
+        Click::new(|_evt, data: &mut AppState, _env| {
+            data.right.update(data.left.data());
+        }),
+    );
+    let title_bar = Flex::row().with_flex_child(text, 1.0).with_child(button);
+    build_source_ui(image, state, title_bar)
+}
+
+fn build_right_source_ui(image: &ImagePreview, state: &AppState) -> impl Widget<AppState> {
+    let text = build_filename(image);
+    let icon = include_str!("assets/left-arrow-button.svg");
+    let svg = Svg::new(SvgData::from_str(icon).unwrap());
+    let button = ControllerHost::new(
+        svg,
+        Click::new(|_evt, data: &mut AppState, _env| {
+            data.left.update(data.right.data());
+        }),
+    );
+    let title_bar = Flex::row().with_child(button).with_flex_child(text, 1.0);
+    build_source_ui(image, state, title_bar)
+}
+
+fn build_source_ui(
+    image: &ImagePreview,
+    state: &AppState,
+    title_bar: impl Widget<AppState> + 'static,
+) -> impl Widget<AppState> {
+    Flex::column().with_child(title_bar).with_flex_child(
+        ScrollLock::new(Zoom::new(Arc::clone(&state.zoom), image_widget(image)))
             .background(Painter::new(draw_background))
             .center()
             .controller(ZoomController::new(Arc::clone(&state.zoom))),
@@ -37,15 +67,24 @@ fn build_source_ui(name: &Option<String>, state: &AppState) -> impl Widget<AppSt
     )
 }
 
+fn build_filename(image: &ImagePreview) -> impl Widget<AppState> {
+    let name = image.filename();
+    let label = match name {
+        Some(name) => Label::new(name),
+        None => Label::new("(empty)"),
+    };
+    Align::centered(label)
+}
+
 fn build_diff_ui(state: &AppState) -> impl Widget<AppState> {
-    let image_buf = get_diff_image(&state.left, &state.right);
+    let image_buf = get_diff_image(&state.left.filename(), &state.right.filename());
     ScrollLock::new(Zoom::new(Arc::clone(&state.zoom), Image::new(image_buf)))
         .background(Painter::new(draw_background))
         .center()
         .controller(ZoomController::new(Arc::clone(&state.zoom)))
 }
 
-fn get_image_from_file(name: &Option<String>) -> RgbaImage {
+fn get_image_from_file(name: &Option<&str>) -> RgbaImage {
     // TODO get some tests here for the failure cases and pass back the message string to
     // replace the file name in the UI for the user
     let name = match name {
@@ -64,7 +103,7 @@ fn get_image_from_file(name: &Option<String>) -> RgbaImage {
     }
 }
 
-fn get_diff_image(left: &Option<String>, right: &Option<String>) -> ImageBuf {
+fn get_diff_image(left: &Option<&str>, right: &Option<&str>) -> ImageBuf {
     let left_image = get_image_from_file(left);
     let right_image = get_image_from_file(right);
 
@@ -108,9 +147,12 @@ fn get_diff_image(left: &Option<String>, right: &Option<String>) -> ImageBuf {
     )
 }
 
-fn image_from_file(name: &Option<String>) -> impl Widget<AppState> {
-    let image_buf = match name {
-        Some(name) => ImageBuf::from_file(name).unwrap_or_else(|_| ImageBuf::empty()),
+fn image_widget(image: &ImagePreview) -> impl Widget<AppState> {
+    let image_buf = match image.data() {
+        Some(data) => {
+            let image_data: Vec<u8> = data.iter().map(|a| (*a).to_owned()).collect();
+            ImageBuf::from_data(image_data.as_slice()).unwrap_or_else(|_| ImageBuf::empty())
+        }
         None => ImageBuf::empty(),
     };
 
