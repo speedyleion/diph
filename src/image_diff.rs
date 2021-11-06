@@ -11,22 +11,20 @@ use druid::image::io::Reader as ImageReader;
 use druid::image::{imageops, DynamicImage, ImageBuffer, Pixel, RgbaImage};
 use druid::piet::{ImageFormat, InterpolationMode};
 use druid::widget::prelude::*;
-use druid::widget::{
-    Align, Click, ControllerHost, Flex, Label, Painter, Split, Svg, SvgData, WidgetExt,
-};
-use druid::{Env, ImageBuf, PaintCtx, Rect, Widget};
+use druid::widget::{Align, Click, ControllerHost, Flex, Label, Painter, Split, Svg, SvgData, WidgetExt, ViewSwitcher};
+use druid::{Env, ImageBuf, PaintCtx, Rect, Widget, Lens};
 use std::cmp::max;
 use std::str::FromStr;
 use std::sync::Arc;
 
 pub fn build_ui(state: &AppState) -> impl Widget<AppState> {
-    let left = build_left_source_ui(&state.left, state);
-    let right = build_right_source_ui(&state.right, state);
+    let left = build_left_source_ui(state);
+    let right = build_right_source_ui(state);
     Split::rows(Split::columns(left, right), build_diff_ui(state))
 }
 
-fn build_left_source_ui(image: &ImagePreview, state: &AppState) -> impl Widget<AppState> {
-    let text = build_filename(image);
+fn build_left_source_ui(state: &AppState) -> impl Widget<AppState> {
+    let text = build_filename(&state.left);
     let icon = include_str!("assets/right-arrow-button.svg");
     let svg = Svg::new(SvgData::from_str(icon).unwrap());
     let button = ControllerHost::new(
@@ -36,11 +34,11 @@ fn build_left_source_ui(image: &ImagePreview, state: &AppState) -> impl Widget<A
         }),
     );
     let title_bar = Flex::row().with_flex_child(text, 1.0).with_child(button);
-    build_source_ui(image, state, title_bar)
+    build_source_ui(state, title_bar, AppState::left)
 }
 
-fn build_right_source_ui(image: &ImagePreview, state: &AppState) -> impl Widget<AppState> {
-    let text = build_filename(image);
+fn build_right_source_ui(state: &AppState) -> impl Widget<AppState> {
+    let text = build_filename(&state.right);
     let icon = include_str!("assets/left-arrow-button.svg");
     let svg = Svg::new(SvgData::from_str(icon).unwrap());
     let button = ControllerHost::new(
@@ -50,16 +48,16 @@ fn build_right_source_ui(image: &ImagePreview, state: &AppState) -> impl Widget<
         }),
     );
     let title_bar = Flex::row().with_child(button).with_flex_child(text, 1.0);
-    build_source_ui(image, state, title_bar)
+    build_source_ui(state, title_bar, AppState::right)
 }
 
 fn build_source_ui(
-    image: &ImagePreview,
     state: &AppState,
     title_bar: impl Widget<AppState> + 'static,
+    lens: impl Lens<AppState, ImagePreview> + 'static,
 ) -> impl Widget<AppState> {
     Flex::column().with_child(title_bar).with_flex_child(
-        ScrollLock::new(Zoom::new(Arc::clone(&state.zoom), image_widget(image)))
+        ScrollLock::new(Zoom::new(Arc::clone(&state.zoom), image_widget(lens)))
             .background(Painter::new(draw_background))
             .center()
             .controller(ZoomController::new(Arc::clone(&state.zoom))),
@@ -77,8 +75,7 @@ fn build_filename(image: &ImagePreview) -> impl Widget<AppState> {
 }
 
 fn build_diff_ui(state: &AppState) -> impl Widget<AppState> {
-    let image_buf = get_diff_image(&state.left.filename(), &state.right.filename());
-    ScrollLock::new(Zoom::new(Arc::clone(&state.zoom), Image::new(image_buf)))
+    ScrollLock::new(Zoom::new(Arc::clone(&state.zoom), diff_image_widget()))
         .background(Painter::new(draw_background))
         .center()
         .controller(ZoomController::new(Arc::clone(&state.zoom)))
@@ -101,6 +98,16 @@ fn get_image_from_file(name: &Option<&str>) -> RgbaImage {
         Ok(image) => image.to_rgba8(),
         Err(_) => DynamicImage::new_rgba8(1, 1).to_rgba8(),
     }
+}
+
+fn diff_image_widget() -> impl Widget<AppState> {
+    ViewSwitcher::new(
+        |data: &AppState, _env| get_diff_image(&data.left.filename(), &data.right.filename()),
+
+        |image_buf: &ImageBuf, _data, _env| {
+            Box::new(Image::new(image_buf.clone()))
+        }
+    )
 }
 
 fn get_diff_image(left: &Option<&str>, right: &Option<&str>) -> ImageBuf {
@@ -147,19 +154,23 @@ fn get_diff_image(left: &Option<&str>, right: &Option<&str>) -> ImageBuf {
     )
 }
 
-fn image_widget(image: &ImagePreview) -> impl Widget<AppState> {
-    let image_buf = match image.data() {
-        Some(data) => {
-            let image_data: Vec<u8> = data.iter().map(|a| (*a).to_owned()).collect();
-            ImageBuf::from_data(image_data.as_slice()).unwrap_or_else(|_| ImageBuf::empty())
+fn image_widget(lens: impl Lens<AppState, ImagePreview>) -> impl Widget<AppState> {
+    ViewSwitcher::new(
+        |data: &ImagePreview, _env| data.clone(),
+        |image: &ImagePreview, _data, _env| {
+            let image_buf = match image.data() {
+                Some(data) => {
+                    let image_data: Vec<u8> = data.iter().map(|a| (*a).to_owned()).collect();
+                    ImageBuf::from_data(image_data.as_slice()).unwrap_or_else(|_| ImageBuf::empty())
+                }
+                None => ImageBuf::empty(),
+            };
+            Box::new(Image::new(image_buf))
         }
-        None => ImageBuf::empty(),
-    };
-
-    Image::new(image_buf)
+    ).lens(lens)
 }
 
-fn draw_background(ctx: &mut PaintCtx, _data: &AppState, _env: &Env) {
+fn draw_background<T>(ctx: &mut PaintCtx, _data: &T, _env: &Env) {
     let rect = ctx.size().to_rect();
     // 40% and 60%
     let dimension = 16;

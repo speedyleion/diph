@@ -9,9 +9,11 @@ use std::sync::{Arc, Mutex};
 use std::fs;
 use std::path::Path;
 
-#[derive(Clone, Data, Default)]
+#[derive(Clone, Data, Default, Lens)]
 pub struct ImagePreview {
+    #[lens(name = "_filename")]
     filename: Option<String>,
+    #[lens(name = "_data")]
     data: Option<Vector<u8>>,
 }
 
