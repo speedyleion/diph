@@ -11,8 +11,11 @@ use druid::image::io::Reader as ImageReader;
 use druid::image::{imageops, DynamicImage, ImageBuffer, Pixel, RgbaImage};
 use druid::piet::{ImageFormat, InterpolationMode};
 use druid::widget::prelude::*;
-use druid::widget::{Align, Click, ControllerHost, Flex, Label, Painter, Split, Svg, SvgData, WidgetExt, ViewSwitcher};
-use druid::{Env, ImageBuf, PaintCtx, Rect, Widget, Lens};
+use druid::widget::{
+    Align, Click, ControllerHost, Flex, Label, Painter, Split, Svg, SvgData, ViewSwitcher,
+    WidgetExt,
+};
+use druid::{Env, ImageBuf, Lens, PaintCtx, Rect, Widget};
 use std::cmp::max;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -103,10 +106,7 @@ fn get_image_from_file(name: &Option<&str>) -> RgbaImage {
 fn diff_image_widget() -> impl Widget<AppState> {
     ViewSwitcher::new(
         |data: &AppState, _env| get_diff_image(&data.left.filename(), &data.right.filename()),
-
-        |image_buf: &ImageBuf, _data, _env| {
-            Box::new(Image::new(image_buf.clone()))
-        }
+        |image_buf: &ImageBuf, _data, _env| Box::new(Image::new(image_buf.clone())),
     )
 }
 
@@ -166,8 +166,9 @@ fn image_widget(lens: impl Lens<AppState, ImagePreview>) -> impl Widget<AppState
                 None => ImageBuf::empty(),
             };
             Box::new(Image::new(image_buf))
-        }
-    ).lens(lens)
+        },
+    )
+    .lens(lens)
 }
 
 fn draw_background<T>(ctx: &mut PaintCtx, _data: &T, _env: &Env) {
