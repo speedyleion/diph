@@ -3,6 +3,4 @@
 //    (See accompanying file LICENSE or copy at
 //          https://www.boost.org/LICENSE_1_0.txt)
 
-fn main(){
-    diph::app::app_main()
-}
+pub mod app;
