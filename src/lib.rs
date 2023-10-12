@@ -4,3 +4,4 @@
 //          https://www.boost.org/LICENSE_1_0.txt)
 
 pub mod app;
+mod text_window;

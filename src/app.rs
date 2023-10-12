@@ -10,15 +10,6 @@ live_design! {
 
     App = {{App}} {
         ui: <Window>{
-            show_bg: true
-            width: Fill,
-            height: Fill
-
-            body = {dock = <Dock> {
-                height: Fill,
-                width: Fill
-                FileTree = <FileTree> {}
-            }}
         }
     }
 }
