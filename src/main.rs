@@ -3,10 +3,10 @@
 //    (See accompanying file LICENSE or copy at
 //          https://www.boost.org/LICENSE_1_0.txt)
 use iced::widget::pane_grid::Axis;
-use iced::widget::{container, pane_grid};
+use iced::widget::{container, pane_grid, row, scrollable, text};
 use iced::{Element, Length, Sandbox, Settings, Theme};
-mod file;
-use crate::file::File;
+mod file_buffer;
+use crate::file_buffer::FileBuffer;
 
 pub fn main() -> iced::Result {
     Diph::run(Settings::default())
@@ -14,7 +14,7 @@ pub fn main() -> iced::Result {
 
 #[derive(Debug)]
 struct Diph {
-    panes: pane_grid::State<File>,
+    panes: pane_grid::State<FileBuffer>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -24,9 +24,11 @@ impl Sandbox for Diph {
     type Message = Message;
 
     fn new() -> Self {
-        let (mut panes, pane) = pane_grid::State::new(File);
+        let file_1 = FileBuffer::from("src/main.rs");
+        let (mut panes, pane) = pane_grid::State::new(file_1);
+        let file_2 = FileBuffer::from("src/file_buffer.rs");
         let (_, _) = panes
-            .split(Axis::Vertical, &pane, File)
+            .split(Axis::Vertical, &pane, file_2)
             .expect("failed to split");
         Self { panes }
     }
@@ -34,15 +36,15 @@ impl Sandbox for Diph {
     fn title(&self) -> String {
         "Diph".into()
     }
-
     fn update(&mut self, _message: Self::Message) {}
 
     fn view(&self) -> Element<Message> {
-        let pane_grid = pane_grid::PaneGrid::new(&self.panes, |_pane, file, _is_maximized| {
-            pane_grid::Content::new(*file)
-        })
-        .width(Length::Fill)
-        .height(Length::Fill);
+        let pane_grid =
+            pane_grid::PaneGrid::new(&self.panes, |_pane, file_buffer, _is_maximized| {
+                pane_grid::Content::new(file_view(file_buffer))
+            })
+            .width(Length::Fill)
+            .height(Length::Fill);
 
         container(pane_grid)
             .width(Length::Fill)
@@ -54,4 +56,15 @@ impl Sandbox for Diph {
     fn theme(&self) -> Theme {
         Theme::Dark
     }
+}
+
+fn file_view(file_buffer: &FileBuffer) -> Element<Message> {
+    let file_contents = row![text::Text::new(format!("{:?}", file_buffer.contents)),];
+
+    container(scrollable(file_contents))
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .padding(5)
+        .center_y()
+        .into()
 }
