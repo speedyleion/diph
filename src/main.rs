@@ -2,9 +2,11 @@
 // Distributed under the Boost Software License, Version 1.0.
 //    (See accompanying file LICENSE or copy at
 //          https://www.boost.org/LICENSE_1_0.txt)
+
 use iced::widget::pane_grid::Axis;
-use iced::widget::{container, pane_grid, row, scrollable, text};
+use iced::widget::{container, pane_grid, scrollable, text};
 use iced::{Element, Length, Sandbox, Settings, Theme};
+
 mod file_buffer;
 use crate::file_buffer::FileBuffer;
 
@@ -59,12 +61,14 @@ impl Sandbox for Diph {
 }
 
 fn file_view(file_buffer: &FileBuffer) -> Element<Message> {
-    let file_contents = row![text::Text::new(format!("{:?}", file_buffer.contents)),];
+    let contents = file_buffer.contents.as_deref().unwrap_or("");
 
-    container(scrollable(file_contents))
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .padding(5)
-        .center_y()
-        .into()
+    container(
+        scrollable(text::Text::new(contents))
+            .width(Length::Fill)
+            .height(Length::Fill),
+    )
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .into()
 }
