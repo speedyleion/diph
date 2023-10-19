@@ -5,13 +5,16 @@
 
 use iced::widget::pane_grid::Axis;
 use iced::widget::{container, pane_grid, scrollable, text};
-use iced::{Element, Length, Sandbox, Settings, Theme};
+use iced::{executor, Application, Command, Element, Font, Length, Settings, Theme};
 
 mod file_buffer;
 use crate::file_buffer::FileBuffer;
 
 pub fn main() -> iced::Result {
-    Diph::run(Settings::default())
+    Diph::run(Settings {
+        default_font: Font::MONOSPACE,
+        ..Settings::default()
+    })
 }
 
 #[derive(Debug)]
@@ -22,23 +25,28 @@ struct Diph {
 #[derive(Debug, Clone, Copy)]
 enum Message {}
 
-impl Sandbox for Diph {
+impl Application for Diph {
+    type Executor = executor::Default;
     type Message = Message;
+    type Theme = Theme;
+    type Flags = ();
 
-    fn new() -> Self {
+    fn new(_flags: ()) -> (Self, Command<Self::Message>) {
         let file_1 = FileBuffer::from("src/main.rs");
         let (mut panes, pane) = pane_grid::State::new(file_1);
         let file_2 = FileBuffer::from("src/file_buffer.rs");
         let (_, _) = panes
             .split(Axis::Vertical, &pane, file_2)
             .expect("failed to split");
-        Self { panes }
+        (Self { panes }, Command::none())
     }
 
     fn title(&self) -> String {
         "Diph".into()
     }
-    fn update(&mut self, _message: Self::Message) {}
+    fn update(&mut self, _message: Self::Message) -> Command<Self::Message> {
+        Command::none()
+    }
 
     fn view(&self) -> Element<Message> {
         let pane_grid =
