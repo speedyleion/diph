@@ -3,9 +3,12 @@
 //    (See accompanying file LICENSE or copy at
 //          https://www.boost.org/LICENSE_1_0.txt)
 
+use iced::highlighter::{self, Highlighter};
 use iced::widget::pane_grid::Axis;
-use iced::widget::{container, pane_grid, scrollable, text};
+use iced::widget::{pane_grid, scrollable, text_editor};
 use iced::{executor, Application, Command, Element, Font, Length, Settings, Theme};
+use std::ffi;
+use std::path::Path;
 
 mod file_buffer;
 use crate::file_buffer::FileBuffer;
@@ -17,7 +20,6 @@ pub fn main() -> iced::Result {
     })
 }
 
-#[derive(Debug)]
 struct Diph {
     panes: pane_grid::State<FileBuffer>,
 }
@@ -49,18 +51,12 @@ impl Application for Diph {
     }
 
     fn view(&self) -> Element<Message> {
-        let pane_grid =
-            pane_grid::PaneGrid::new(&self.panes, |_pane, file_buffer, _is_maximized| {
-                pane_grid::Content::new(file_view(file_buffer))
-            })
-            .width(Length::Fill)
-            .height(Length::Fill);
-
-        container(pane_grid)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .padding(10)
-            .into()
+        pane_grid::PaneGrid::new(&self.panes, |_pane, file_buffer, _is_maximized| {
+            pane_grid::Content::new(scrollable(file_view(file_buffer)))
+        })
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
     }
 
     fn theme(&self) -> Theme {
@@ -69,14 +65,19 @@ impl Application for Diph {
 }
 
 fn file_view(file_buffer: &FileBuffer) -> Element<Message> {
-    let contents = file_buffer.contents.as_deref().unwrap_or("");
-
-    container(
-        scrollable(text::Text::new(contents))
-            .width(Length::Fill)
-            .height(Length::Fill),
-    )
-    .width(Length::Fill)
-    .height(Length::Fill)
-    .into()
+    text_editor(&file_buffer.content)
+        .highlight::<Highlighter>(
+            highlighter::Settings {
+                theme: highlighter::Theme::SolarizedDark,
+                extension: file_buffer
+                    .path
+                    .as_deref()
+                    .and_then(Path::extension)
+                    .and_then(ffi::OsStr::to_str)
+                    .map(str::to_string)
+                    .unwrap_or(String::from("rs")),
+            },
+            |highlight, _theme| highlight.to_format(),
+        )
+        .into()
 }
