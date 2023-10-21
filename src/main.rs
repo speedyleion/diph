@@ -3,15 +3,12 @@
 //    (See accompanying file LICENSE or copy at
 //          https://www.boost.org/LICENSE_1_0.txt)
 
-use iced::highlighter::{self, Highlighter};
 use iced::widget::pane_grid::Axis;
-use iced::widget::{pane_grid, scrollable, text_editor};
+use iced::widget::{pane_grid, scrollable};
 use iced::{executor, Application, Command, Element, Font, Length, Settings, Theme};
-use std::ffi;
-use std::path::Path;
 
 mod file_buffer;
-use crate::file_buffer::FileBuffer;
+use crate::file_buffer::{file_view, FileBuffer};
 
 pub fn main() -> iced::Result {
     Diph::run(Settings {
@@ -36,7 +33,7 @@ impl Application for Diph {
     fn new(_flags: ()) -> (Self, Command<Self::Message>) {
         let file_1 = FileBuffer::from("src/main.rs");
         let (mut panes, pane) = pane_grid::State::new(file_1);
-        let file_2 = FileBuffer::from("src/file_buffer.rs");
+        let file_2 = FileBuffer::from("src/main.rs");
         let (_, _) = panes
             .split(Axis::Vertical, &pane, file_2)
             .expect("failed to split");
@@ -64,20 +61,3 @@ impl Application for Diph {
     }
 }
 
-fn file_view(file_buffer: &FileBuffer) -> Element<Message> {
-    text_editor(&file_buffer.content)
-        .highlight::<Highlighter>(
-            highlighter::Settings {
-                theme: highlighter::Theme::SolarizedDark,
-                extension: file_buffer
-                    .path
-                    .as_deref()
-                    .and_then(Path::extension)
-                    .and_then(ffi::OsStr::to_str)
-                    .map(str::to_string)
-                    .unwrap_or(String::from("rs")),
-            },
-            |highlight, _theme| highlight.to_format(),
-        )
-        .into()
-}
