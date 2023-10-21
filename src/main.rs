@@ -3,12 +3,12 @@
 //    (See accompanying file LICENSE or copy at
 //          https://www.boost.org/LICENSE_1_0.txt)
 
-use iced::widget::pane_grid::Axis;
-use iced::widget::{pane_grid, scrollable};
+use iced::widget::pane_grid;
+use iced::widget::pane_grid::{Axis, Pane};
 use iced::{executor, Application, Command, Element, Font, Length, Settings, Theme};
 
 mod file_buffer;
-use crate::file_buffer::{file_view, FileBuffer};
+use crate::file_buffer::FileBuffer;
 
 pub fn main() -> iced::Result {
     Diph::run(Settings {
@@ -19,10 +19,14 @@ pub fn main() -> iced::Result {
 
 struct Diph {
     panes: pane_grid::State<FileBuffer>,
+    //HACK the first pane
+    first_pane: Pane,
 }
 
-#[derive(Debug, Clone, Copy)]
-enum Message {}
+#[derive(Debug, Clone)]
+enum Message {
+    FileBuffer(file_buffer::Action),
+}
 
 impl Application for Diph {
     type Executor = executor::Default;
@@ -37,19 +41,31 @@ impl Application for Diph {
         let (_, _) = panes
             .split(Axis::Vertical, &pane, file_2)
             .expect("failed to split");
-        (Self { panes }, Command::none())
+        (
+            Self {
+                panes,
+                first_pane: pane,
+            },
+            Command::none(),
+        )
     }
 
     fn title(&self) -> String {
         "Diph".into()
     }
-    fn update(&mut self, _message: Self::Message) -> Command<Self::Message> {
+    fn update(&mut self, message: Self::Message) -> Command<Self::Message> {
+        match message {
+            Message::FileBuffer(_) => {
+                let buffer = self.panes.get_mut(&self.first_pane).unwrap();
+                buffer.update(message)
+            }
+        }
         Command::none()
     }
 
     fn view(&self) -> Element<Message> {
         pane_grid::PaneGrid::new(&self.panes, |_pane, file_buffer, _is_maximized| {
-            pane_grid::Content::new(scrollable(file_view(file_buffer)))
+            pane_grid::Content::new(file_buffer.view())
         })
         .width(Length::Fill)
         .height(Length::Fill)
@@ -60,4 +76,3 @@ impl Application for Diph {
         Theme::Dark
     }
 }
-

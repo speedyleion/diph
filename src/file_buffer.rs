@@ -3,13 +3,19 @@
 //    (See accompanying file LICENSE or copy at
 //          https://www.boost.org/LICENSE_1_0.txt)
 
-use std::ffi;
-use iced::widget::text_editor;
-use std::path::{Path, PathBuf};
+use crate::Message;
 use iced::highlighter;
 use iced::highlighter::Highlighter;
+use iced::widget::{column, horizontal_space, row, text, text_editor};
 use iced::Element;
-use crate::Message;
+use iced::Length;
+use std::ffi;
+use std::path::{Path, PathBuf};
+
+#[derive(Debug, Clone)]
+pub(crate) enum Action {
+    Edit(text_editor::Action),
+}
 
 pub struct FileBuffer {
     pub path: Option<PathBuf>,
@@ -30,20 +36,54 @@ impl<T: AsRef<Path>> From<T> for FileBuffer {
     }
 }
 
-pub(crate) fn file_view(file_buffer: &FileBuffer) -> Element<Message> {
-    text_editor(&file_buffer.content)
-        .highlight::<Highlighter>(
-            highlighter::Settings {
-                theme: highlighter::Theme::SolarizedDark,
-                extension: file_buffer
-                    .path
-                    .as_deref()
-                    .and_then(Path::extension)
-                    .and_then(ffi::OsStr::to_str)
-                    .map(str::to_string)
-                    .unwrap_or(String::from("rs")),
+impl FileBuffer {
+    pub(crate) fn update(&mut self, message: Message) {
+        match message {
+            Message::FileBuffer(action) => match action {
+                Action::Edit(action) => self.content.edit(action),
             },
-            |highlight, _theme| highlight.to_format(),
-        )
+        }
+    }
+
+    pub(crate) fn view(&self) -> Element<Message> {
+        let extension = self
+            .path
+            .as_deref()
+            .and_then(Path::extension)
+            .and_then(ffi::OsStr::to_str)
+            .unwrap_or("rs");
+
+        let buffer = text_editor(&self.content)
+            .on_edit(action_to_message)
+            .highlight::<Highlighter>(
+                highlighter::Settings {
+                    theme: highlighter::Theme::SolarizedDark,
+                    extension: extension.into(),
+                },
+                |highlight, _theme| highlight.to_format(),
+            );
+
+        column![buffer, self.status_line_view()].into()
+    }
+
+    fn status_line_view(&self) -> Element<Message> {
+        let file_name = self
+            .path
+            .as_deref()
+            .and_then(Path::file_name)
+            .and_then(ffi::OsStr::to_str)
+            .unwrap_or("New file");
+        let (line, column) = self.content.cursor_position();
+        let position = format!("{}:{}", line + 1, column + 1);
+        row![
+            text(file_name),
+            horizontal_space(Length::Fill),
+            text(position),
+        ]
         .into()
+    }
+}
+
+fn action_to_message(action: text_editor::Action) -> Message {
+    Message::FileBuffer(Action::Edit(action))
 }
