@@ -3,12 +3,10 @@
 //    (See accompanying file LICENSE or copy at
 //          https://www.boost.org/LICENSE_1_0.txt)
 
-use iced::widget::pane_grid;
-use iced::widget::pane_grid::{Axis, Pane};
-use iced::{executor, Application, Command, Element, Font, Length, Settings, Theme};
+use iced::{executor, Application, Command, Element, Font, Settings, Theme};
 
-mod file_buffer;
-use crate::file_buffer::FileBuffer;
+mod widgets;
+use crate::widgets::diff::{Diff, DiffMessage};
 
 pub fn main() -> iced::Result {
     Diph::run(Settings {
@@ -18,14 +16,12 @@ pub fn main() -> iced::Result {
 }
 
 struct Diph {
-    panes: pane_grid::State<FileBuffer>,
-    //HACK the first pane
-    first_pane: Pane,
+    diff: Diff,
 }
 
 #[derive(Debug, Clone)]
 enum Message {
-    FileBuffer(file_buffer::Action),
+    Diff(DiffMessage),
 }
 
 impl Application for Diph {
@@ -35,19 +31,7 @@ impl Application for Diph {
     type Flags = ();
 
     fn new(_flags: ()) -> (Self, Command<Self::Message>) {
-        let file_1 = FileBuffer::from("src/main.rs");
-        let (mut panes, pane) = pane_grid::State::new(file_1);
-        let file_2 = FileBuffer::from("src/main.rs");
-        let (_, _) = panes
-            .split(Axis::Vertical, &pane, file_2)
-            .expect("failed to split");
-        (
-            Self {
-                panes,
-                first_pane: pane,
-            },
-            Command::none(),
-        )
+        (Self { diff: Diff::new() }, Command::none())
     }
 
     fn title(&self) -> String {
@@ -55,21 +39,13 @@ impl Application for Diph {
     }
     fn update(&mut self, message: Self::Message) -> Command<Self::Message> {
         match message {
-            Message::FileBuffer(_) => {
-                let buffer = self.panes.get_mut(&self.first_pane).unwrap();
-                buffer.update(message)
-            }
+            Message::Diff(m) => self.diff.update(m),
         }
         Command::none()
     }
 
     fn view(&self) -> Element<Message> {
-        pane_grid::PaneGrid::new(&self.panes, |_pane, file_buffer, _is_maximized| {
-            pane_grid::Content::new(file_buffer.view())
-        })
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .into()
+        self.diff.view().map(Message::Diff)
     }
 
     fn theme(&self) -> Theme {
