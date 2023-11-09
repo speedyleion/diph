@@ -3,8 +3,9 @@
 //    (See accompanying file LICENSE or copy at
 //          https://www.boost.org/LICENSE_1_0.txt)
 
-use crate::widgets::file_buffer::{FileBuffer, FileBufferMessage};
 /// A widget that displays a diff of two files.
+
+use crate::widgets::file_buffer::{FileBuffer, FileBufferMessage};
 use iced::Element;
 use iced_aw::split::Axis;
 use iced_aw::Split;

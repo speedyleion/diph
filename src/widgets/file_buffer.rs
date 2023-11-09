@@ -4,7 +4,7 @@
 //          https://www.boost.org/LICENSE_1_0.txt)
 
 /// A widget that displays an editable file buffer.
-use iced::widget::{column, horizontal_space, row, text};
+use iced::widget::{column, horizontal_space, row, scrollable, text};
 use iced::Length;
 use iced::{Command, Element};
 use std::ffi;
@@ -46,8 +46,9 @@ impl FileBuffer {
             .unwrap_or("rs");
 
         let buffer = text(&self.content);
+        let scrolled_area = scrollable(buffer).width(Length::Fill).height(Length::Fill);
 
-        column![buffer, self.status_line_view()].into()
+        column![scrolled_area, self.status_line_view()].into()
     }
 
     fn status_line_view(&self) -> Element<FileBufferMessage> {
