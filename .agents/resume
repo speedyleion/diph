@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Nothing to reconnect or authenticate for diph; confirm the toolchain survived.
+set -euo pipefail
+
+if [ ! -x "$HOME/.cargo/bin/cargo" ]; then
+	echo "cargo missing; rerun .agents/setup" >&2
+	exit 1
+fi

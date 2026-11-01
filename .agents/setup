@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+# Prepares an Amp orb for diph: Rust toolchain, the Linux libraries egui/eframe
+# (winit, glow, wgpu) need to build and open windows, and warm Cargo caches.
+set -euo pipefail
+
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+repo_root="$PWD"
+
+step() {
+	local name="$1"
+	shift
+	echo "==> $name"
+	local start=$SECONDS
+	"$@"
+	echo "<== $name ($((SECONDS - start))s)"
+}
+
+# Build headers plus runtime libraries winit/glutin dlopen (xkbcommon-x11,
+# Xcursor, Xrandr, Xi, EGL/GL, Wayland, fontconfig).
+apt_packages=(
+	build-essential
+	pkg-config
+	libxkbcommon-dev
+	libxkbcommon-x11-0
+	libwayland-dev
+	libx11-dev
+	libxcursor-dev
+	libxrandr-dev
+	libxi-dev
+	libxcb-render0-dev
+	libxcb-shape0-dev
+	libxcb-xfixes0-dev
+	libgl1-mesa-dev
+	libegl1-mesa-dev
+	libgl1-mesa-dri
+	libvulkan1
+	mesa-vulkan-drivers
+	libfontconfig1-dev
+	# Orbs have no display by default; `xvfb-run -a cargo run -- old new` gives one.
+	xvfb
+	xauth
+)
+
+install_apt_packages() {
+	local missing=()
+	local pkg
+	for pkg in "${apt_packages[@]}"; do
+		if ! dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null | grep -q 'install ok installed'; then
+			missing+=("$pkg")
+		fi
+	done
+	if ((${#missing[@]} == 0)); then
+		echo "all system packages already installed"
+		return
+	fi
+	echo "installing: ${missing[*]}"
+	sudo apt-get update -qq
+	sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends "${missing[@]}"
+}
+
+install_rust() {
+	if [ ! -x "$HOME/.cargo/bin/rustup" ]; then
+		curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |
+			sh -s -- -y --profile minimal --default-toolchain stable --component rustfmt,clippy
+	fi
+	# The installer cannot update this running script's environment.
+	# shellcheck disable=SC1091
+	source "$HOME/.cargo/env"
+	# Honour a toolchain pin if the repository adds one.
+	if [ -f rust-toolchain.toml ] || [ -f rust-toolchain ]; then
+		rustup toolchain install
+	fi
+	rustc --version
+	cargo --version
+}
+
+warm_cargo() {
+	if [ ! -f Cargo.lock ]; then
+		echo "no Cargo.lock in $repo_root; skipping dependency fetch and build"
+		return
+	fi
+	cargo fetch --locked
+	cargo build --locked --all-targets
+}
+
+step "system packages" install_apt_packages
+step "rust toolchain" install_rust
+step "cargo fetch and build" warm_cargo
