@@ -15,3 +15,16 @@ now.
 - Don't narrate how the PR evolved ("Also:", "after review"). Update the
   description so it matches the final diff.
 - Title: imperative and under ~70 characters. Body: wrap at 72 columns.
+
+## Code comments, docs, and descriptions
+
+The same reader applies to code comments, the README, crate descriptions,
+and `--help` text: describe what the code does now.
+
+- Keep descriptions to a plain summary of what the tool does. Leave out
+  adjectives that don't tell the reader anything ("native") and features
+  that don't exist yet ("images").
+- Don't describe the project's status or plans ("early in development",
+  "does not do X yet").
+- Don't reference how the code is developed or reviewed, such as stacked
+  PRs or branches, in comments or config.
