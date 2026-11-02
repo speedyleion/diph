@@ -47,10 +47,12 @@ pub struct SideBySide {
 }
 
 impl SideBySide {
+    /// Line endings are not compared, so CRLF against LF, or a missing
+    /// newline at the end of the file, does not mark lines as changed.
     pub fn new(left_text: &str, right_text: &str) -> Self {
-        let diff = TextDiff::from_lines(left_text, right_text);
         let left_lines = split_lines(left_text);
         let right_lines = split_lines(right_text);
+        let diff = TextDiff::from_slices(&left_lines, &right_lines);
 
         let mut rows = Vec::new();
         for op in diff.ops() {
@@ -122,8 +124,7 @@ fn ranges_in(line: &str, slices: &[(ChangeTag, &str)], tag: ChangeTag) -> Vec<Ra
         .collect()
 }
 
-/// Splits like [`TextDiff::from_lines`] does, so line indices match, but
-/// drops the line endings.
+/// Splits into lines without their line endings.
 fn split_lines(text: &str) -> Vec<&str> {
     text.split_inclusive('\n')
         .map(|l| l.trim_end_matches(['\n', '\r']))
@@ -231,6 +232,12 @@ mod tests {
             right.iter().map(|l| &l.text).collect::<Vec<_>>(),
             ["\tindented!", "same"]
         );
+    }
+
+    #[test]
+    fn ignores_line_ending_differences() {
+        let diff = SideBySide::new("a\r\nb\r\nc", "a\nb\nc\n");
+        assert!(diff.rows.iter().all(|r| r.kind == RowKind::Equal));
     }
 
     #[test]
