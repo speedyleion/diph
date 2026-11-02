@@ -1,9 +1,16 @@
 //! Side-by-side text diff view.
 
-use diph_core::{Line, Row, RowKind, SideBySide};
+use std::path::{Path, PathBuf};
+use std::sync::mpsc::{Receiver, Sender, channel};
+
+use diph_core::{Highlighter, Line, Row, RowKind, SideBySide, Span};
 use eframe::egui::{
     self, Align2, Color32, FontId, InputState, Key, Painter, Rect, ScrollArea, Sense, Stroke,
     TextFormat, TextStyle, pos2, text::LayoutJob, vec2,
+};
+use itertools::{
+    EitherOrBoth::{Both, Left, Right},
+    Itertools as _,
 };
 
 /// Background of a line with nothing opposite it.
@@ -20,6 +27,16 @@ const DIVIDER: Color32 = Color32::from_gray(60);
 
 /// Rows of unchanged context kept above a change when jumping to it.
 const CONTEXT_ROWS: usize = 3;
+/// Lines highlighted per message from the background highlighter, so the top
+/// of a large file gets colors without waiting for the rest.
+const HIGHLIGHT_CHUNK: usize = 1000;
+
+/// Syntax colors for a run of lines on one side.
+struct ColorsChunk {
+    /// 0 for the left side, 1 for the right.
+    side: usize,
+    lines: Vec<Vec<Span>>,
+}
 
 pub struct TextView {
     diff: SideBySide,
@@ -29,6 +46,10 @@ pub struct TextView {
     current_change: Option<usize>,
     /// Row to scroll to on the next frame.
     scroll_to_row: Option<usize>,
+    /// Syntax colors of the left and right side, filled in from the top as
+    /// the background highlighter delivers them.
+    colors: [SideColors; 2],
+    colors_rx: Option<Receiver<ColorsChunk>>,
 }
 
 impl TextView {
@@ -39,12 +60,33 @@ impl TextView {
             right_label,
             current_change: None,
             scroll_to_row: None,
+            colors: Default::default(),
+            colors_rx: None,
         };
         view.step_change(1);
         view
     }
 
+    /// Starts highlighting both sides on background threads, picking each
+    /// side's language from its path. Lines show uncolored until their
+    /// colors arrive.
+    pub fn highlight_in_background(&mut self, paths: [PathBuf; 2], ctx: egui::Context) {
+        let (tx, rx) = channel();
+        self.colors_rx = Some(rx);
+        let rows = &self.diff.rows;
+        let sides = [
+            side_texts(rows.iter().filter_map(|r| r.left.as_ref())),
+            side_texts(rows.iter().filter_map(|r| r.right.as_ref())),
+        ];
+        std::thread::spawn(move || highlight_sides(&paths, &sides, &tx, &ctx));
+    }
+
     pub fn show(&mut self, ui: &mut egui::Ui) {
+        if let Some(rx) = &self.colors_rx {
+            for chunk in rx.try_iter() {
+                self.colors[chunk.side].lines.extend(chunk.lines);
+            }
+        }
         if ui.input(|i| i.key_pressed(Key::Escape)) {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
         }
@@ -113,12 +155,54 @@ impl TextView {
             let offset = row.saturating_sub(CONTEXT_ROWS) as f32 * row_height;
             area = area.vertical_scroll_offset(offset.min(max_offset).max(0.0));
         }
-        let diff = &self.diff;
+        let (diff, colors) = (&self.diff, &self.colors);
         area.show_rows(ui, layout.row_height, diff.rows.len(), |ui, range| {
             for row in &diff.rows[range] {
-                layout.paint_row(ui, row);
+                layout.paint_row(ui, colors, row);
             }
         });
+    }
+}
+
+/// The texts of one side's lines, in order.
+fn side_texts<'a>(lines: impl Iterator<Item = &'a Line>) -> Vec<String> {
+    lines.map(|l| l.text.clone()).collect()
+}
+
+/// Highlights both sides at once, sending each side's colors over `tx` in
+/// chunks and requesting a repaint after each. Stops once the window has
+/// closed.
+fn highlight_sides(
+    paths: &[PathBuf; 2],
+    sides: &[Vec<String>; 2],
+    tx: &Sender<ColorsChunk>,
+    ctx: &egui::Context,
+) {
+    let highlighter = &Highlighter::default();
+    std::thread::scope(|scope| {
+        for (side, (path, lines)) in paths.iter().zip(sides).enumerate() {
+            scope.spawn(move || highlight_side(highlighter, path, lines, side, tx, ctx));
+        }
+    });
+}
+
+/// Highlights one side's `lines`, sending them over `tx` tagged with `side`.
+fn highlight_side(
+    highlighter: &Highlighter,
+    path: &Path,
+    lines: &[String],
+    side: usize,
+    tx: &Sender<ColorsChunk>,
+    ctx: &egui::Context,
+) {
+    let mut spans = highlighter.highlight(path, lines).peekable();
+    while spans.peek().is_some() {
+        let lines = spans.by_ref().take(HIGHLIGHT_CHUNK).collect();
+        // Fails only once the window has closed.
+        if tx.send(ColorsChunk { side, lines }).is_err() {
+            return;
+        }
+        ctx.request_repaint();
     }
 }
 
@@ -155,29 +239,31 @@ struct RowLayout {
 
 impl RowLayout {
     /// Paints `row` across both halves, with a divider between them.
-    fn paint_row(&self, ui: &mut egui::Ui, row: &Row) {
+    fn paint_row(&self, ui: &mut egui::Ui, colors: &[SideColors; 2], row: &Row) {
         let size = vec2(ui.available_width(), self.row_height);
         let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
         let painter = ui.painter();
         let (left, right) = rect.split_left_right_at_x(rect.left() + self.half_width);
         let background = background(row);
-        self.paint_half(ui, painter, left, row.left.as_ref(), background);
-        self.paint_half(ui, painter, right, row.right.as_ref(), background);
+        let left_line = row.left.as_ref().map(|l| (l, colors[0].line(l)));
+        let right_line = row.right.as_ref().map(|l| (l, colors[1].line(l)));
+        self.paint_half(ui, painter, left, left_line, background);
+        self.paint_half(ui, painter, right, right_line, background);
         painter.vline(left.right(), rect.y_range(), Stroke::new(1.0, DIVIDER));
     }
 
     /// Paints one half of a row: the background, the line number, and the
-    /// line text clipped to the half, with its changed words highlighted. A
-    /// half without a line gets the filler.
+    /// line text in the colors of its spans, clipped to the half, with its
+    /// changed words highlighted. A half without a line gets the filler.
     fn paint_half(
         &self,
         ui: &egui::Ui,
         painter: &Painter,
         half: Rect,
-        line: Option<&Line>,
+        line: Option<(&Line, &[Span])>,
         background: Option<Color32>,
     ) {
-        let Some(line) = line else {
+        let Some((line, spans)) = line else {
             painter.rect_filled(half, 0.0, FILLER_BG);
             return;
         };
@@ -197,34 +283,64 @@ impl RowLayout {
         );
 
         let text_rect = Rect::from_min_max(pos2(gutter_right, half.top()), half.max);
-        let galley = ui.fonts_mut(|f| f.layout_job(self.line_job(line)));
+        let galley = ui.fonts_mut(|f| f.layout_job(self.line_job(line, spans)));
         let pos = pos2(gutter_right, mid_y - galley.size().y / 2.0);
         painter
             .with_clip_rect(text_rect)
             .galley(pos, galley, TEXT_FG);
     }
 
-    /// Lays out a line with its changed words on [`CHANGED_WORD_BG`].
-    fn line_job(&self, line: &Line) -> LayoutJob {
+    /// Lays out `line` in the colors of `spans`, with its changed words on
+    /// [`CHANGED_WORD_BG`].
+    fn line_job(&self, line: &Line, spans: &[Span]) -> LayoutJob {
+        let color_starts = spans.iter().map(|span| {
+            let [r, g, b] = span.rgb;
+            (span.range.start, Color32::from_rgb(r, g, b))
+        });
+        let background_starts = (line.changed_words.iter())
+            .flat_map(|r| [(r.start, CHANGED_WORD_BG), (r.end, Color32::TRANSPARENT)]);
         let mut job = LayoutJob::default();
-        let mut pos = 0;
-        for range in &line.changed_words {
-            let unchanged = &line.text[pos..range.start];
-            job.append(unchanged, 0.0, self.format(Color32::TRANSPARENT));
-            job.append(&line.text[range.clone()], 0.0, self.format(CHANGED_WORD_BG));
-            pos = range.end;
+        let (mut start, mut color, mut background) = (0, TEXT_FG, Color32::TRANSPARENT);
+        // Each event starts a new color, a new background, or both.
+        for event in color_starts.merge_join_by(background_starts, |a, b| a.0.cmp(&b.0)) {
+            let end = event.as_ref().reduce(|a, _| a).0;
+            self.append_piece(&mut job, &line.text[start..end], color, background);
+            start = end;
+            match event {
+                Left((_, c)) => color = c,
+                Right((_, b)) => background = b,
+                Both((_, c), (_, b)) => (color, background) = (c, b),
+            }
         }
-        job.append(&line.text[pos..], 0.0, self.format(Color32::TRANSPARENT));
+        self.append_piece(&mut job, &line.text[start..], color, background);
         job
     }
 
-    fn format(&self, background: Color32) -> TextFormat {
-        TextFormat {
+    /// Appends `text` to `job` in `color` on `background`, unless it is empty.
+    fn append_piece(&self, job: &mut LayoutJob, text: &str, color: Color32, background: Color32) {
+        if text.is_empty() {
+            return;
+        }
+        let format = TextFormat {
             font_id: self.font.clone(),
-            color: TEXT_FG,
+            color,
             background,
             ..Default::default()
-        }
+        };
+        job.append(text, 0.0, format);
+    }
+}
+
+/// Syntax colors of one side's lines, by line index.
+#[derive(Default)]
+struct SideColors {
+    lines: Vec<Vec<Span>>,
+}
+
+impl SideColors {
+    /// The colors of `line`; empty until highlighted.
+    fn line(&self, line: &Line) -> &[Span] {
+        self.lines.get(line.index).map_or(&[], Vec::as_slice)
     }
 }
 

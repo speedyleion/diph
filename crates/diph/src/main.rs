@@ -35,7 +35,7 @@ fn main() -> anyhow::Result<()> {
     let diff = SideBySide::new(&read(&args.left)?, &read(&args.right)?);
     let (left_label, right_label) = (args.left.display(), args.right.display());
     let title = format!("diph — {left_label} ↔ {right_label}");
-    let view = TextView::new(diff, left_label.to_string(), right_label.to_string());
+    let mut view = TextView::new(diff, left_label.to_string(), right_label.to_string());
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -46,9 +46,10 @@ fn main() -> anyhow::Result<()> {
     eframe::run_native(
         "diph",
         options,
-        Box::new(|cc| {
+        Box::new(move |cc| {
             // The diff colors are picked for a dark background.
             cc.egui_ctx.set_theme(egui::Theme::Dark);
+            view.highlight_in_background([args.left, args.right], cc.egui_ctx.clone());
             Ok(Box::new(view))
         }),
     )
