@@ -10,3 +10,5 @@ repository.workspace = true
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
+diph-core = { path = "../diph-core" }
+eframe = "0.37"
