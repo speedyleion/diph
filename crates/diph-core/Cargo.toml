@@ -7,7 +7,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-similar = "3"
+similar = { version = "3", features = ["unicode"] }
 
 [dev-dependencies]
 insta = "1"
