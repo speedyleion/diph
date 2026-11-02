@@ -7,6 +7,8 @@ message, so write both for someone reading `git log` on main a year from
 now.
 
 - Describe what the change does and why, as it stands once merged.
+- Stay at the level of behavior. Leave algorithms, data structures, and
+  examples of how the code works to the diff and the tests.
 - Don't mention future work, follow-up PRs, or what will come later.
 - Don't mention what the change doesn't do, or work that may not exist
   later (spikes, other branches, other PRs).
@@ -28,3 +30,18 @@ and `--help` text: describe what the code does now.
   "does not do X yet").
 - Don't reference how the code is developed or reviewed, such as stacked
   PRs or branches, in comments or config.
+- A doc comment states what a caller gets: inputs, outputs, and
+  guarantees. Leave out how the function computes it and what callers do
+  with the result.
+- Don't repeat what the signature already says, such as the return type
+  or that there are two of something.
+
+## Code
+
+- Before writing an algorithm by hand, check whether an existing
+  dependency already provides it.
+- Name fields after what they hold (`deleted_words`, not `old_changed`).
+- Prefer iterator chains and `collect()` to `for` loops over `mut`
+  accumulators when the result reads as clearly.
+- Keep closures to a couple of lines. Make anything longer a named
+  function, passing in what it needs from the enclosing scope.
