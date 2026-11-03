@@ -22,23 +22,25 @@ pub enum RowKind {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Row {
     pub kind: RowKind,
-    /// Index of the line in the left text, counting from zero.
-    pub left: Option<usize>,
-    /// Index of the line in the right text, counting from zero.
-    pub right: Option<usize>,
-    /// For [`RowKind::Changed`] rows, byte ranges in the left line of the
-    /// words that are not in the right line. Empty for other kinds.
-    pub left_changed_words: Vec<Range<usize>>,
-    /// For [`RowKind::Changed`] rows, byte ranges in the right line of the
-    /// words that are not in the left line. Empty for other kinds.
-    pub right_changed_words: Vec<Range<usize>>,
+    pub left: Option<Line>,
+    pub right: Option<Line>,
 }
 
+/// One side's line in a row.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Line {
+    /// Index of the line in its text, counting from zero.
+    pub index: usize,
+    /// The line, without its line ending.
+    pub text: String,
+    /// For [`RowKind::Changed`] rows, byte ranges of the words that are not in
+    /// the line opposite. Empty for other kinds.
+    pub changed_words: Vec<Range<usize>>,
+}
+
+/// The rows of a side-by-side view. Each side's lines appear in order, so
+/// walking the rows visits every line of each text once.
 pub struct SideBySide {
-    /// The left text's lines, without line endings.
-    pub left_lines: Vec<String>,
-    /// The right text's lines, without line endings.
-    pub right_lines: Vec<String>,
     pub rows: Vec<Row>,
 }
 
@@ -56,30 +58,33 @@ impl SideBySide {
             for i in 0..left.len().max(right.len()) {
                 let left = (i < left.len()).then_some(left.start + i);
                 let right = (i < right.len()).then_some(right.start + i);
-                let (kind, (left_changed_words, right_changed_words)) = match (tag, left, right) {
+                let (kind, (left_words, right_words)) = match (tag, left, right) {
                     (DiffTag::Equal, ..) => (RowKind::Equal, Default::default()),
                     (_, Some(l), Some(r)) => (
                         RowKind::Changed,
-                        word_changes(&left_lines[l], &right_lines[r]),
+                        word_changes(left_lines[l], right_lines[r]),
                     ),
                     (_, Some(_), None) => (RowKind::LeftOnly, Default::default()),
                     _ => (RowKind::RightOnly, Default::default()),
                 };
                 rows.push(Row {
                     kind,
-                    left,
-                    right,
-                    left_changed_words,
-                    right_changed_words,
+                    left: left.map(|l| line(&left_lines, l, left_words)),
+                    right: right.map(|r| line(&right_lines, r, right_words)),
                 });
             }
         }
 
-        Self {
-            left_lines,
-            right_lines,
-            rows,
-        }
+        Self { rows }
+    }
+}
+
+/// The `index`th of `lines`, with its `changed_words`.
+fn line(lines: &[&str], index: usize, changed_words: Vec<Range<usize>>) -> Line {
+    Line {
+        index,
+        text: lines[index].to_owned(),
+        changed_words,
     }
 }
 
@@ -111,9 +116,9 @@ fn ranges_in(line: &str, slices: &[(ChangeTag, &str)], tag: ChangeTag) -> Vec<Ra
 
 /// Splits like [`TextDiff::from_lines`] does, so line indices match, but
 /// drops the line endings.
-fn split_lines(text: &str) -> Vec<String> {
+fn split_lines(text: &str) -> Vec<&str> {
     text.split_inclusive('\n')
-        .map(|l| l.trim_end_matches(['\n', '\r']).to_owned())
+        .map(|l| l.trim_end_matches(['\n', '\r']))
         .collect()
 }
 
@@ -133,8 +138,8 @@ mod tests {
                 RowKind::RightOnly => '>',
                 RowKind::Changed => '~',
             };
-            let left = render_side(&diff.left_lines, row.left, &row.left_changed_words);
-            let right = render_side(&diff.right_lines, row.right, &row.right_changed_words);
+            let left = render_side(row.left.as_ref());
+            let right = render_side(row.right.as_ref());
             out += format!("{marker} {left:<26}| {right}").trim_end();
             out += "\n";
         }
@@ -142,17 +147,17 @@ mod tests {
     }
 
     /// One side of a rendered row: the 1-based line number and text, with
-    /// the `changed` byte ranges in brackets. Empty if the side has no line.
-    fn render_side(lines: &[String], line: Option<usize>, changed: &[Range<usize>]) -> String {
-        let Some(l) = line else {
+    /// the changed words in brackets. Empty if the side has no line.
+    fn render_side(line: Option<&Line>) -> String {
+        let Some(line) = line else {
             return String::new();
         };
-        let mut text = lines[l].clone();
-        for r in changed.iter().rev() {
+        let mut text = line.text.clone();
+        for r in line.changed_words.iter().rev() {
             text.insert(r.end, ']');
             text.insert(r.start, '[');
         }
-        format!("{} {text}", l + 1)
+        format!("{} {text}", line.index + 1)
     }
 
     #[test]
@@ -203,8 +208,16 @@ mod tests {
         let left = "\tindented\r\nsame\r\n";
         let right = "\tindented!\r\nsame\r\n";
         let diff = SideBySide::new(left, right);
-        assert_eq!(diff.left_lines, ["\tindented", "same"]);
-        assert_eq!(diff.right_lines, ["\tindented!", "same"]);
+        let left: Vec<_> = diff.rows.iter().filter_map(|r| r.left.as_ref()).collect();
+        let right: Vec<_> = diff.rows.iter().filter_map(|r| r.right.as_ref()).collect();
+        assert_eq!(
+            left.iter().map(|l| &l.text).collect::<Vec<_>>(),
+            ["\tindented", "same"]
+        );
+        assert_eq!(
+            right.iter().map(|l| &l.text).collect::<Vec<_>>(),
+            ["\tindented!", "same"]
+        );
     }
 
     #[test]

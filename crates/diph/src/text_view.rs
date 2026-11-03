@@ -1,6 +1,6 @@
 //! Side-by-side text diff view.
 
-use diph_core::{Row, RowKind, SideBySide};
+use diph_core::{Line, Row, RowKind, SideBySide};
 use eframe::egui::{
     self, Align2, Color32, FontId, Painter, Rect, ScrollArea, Sense, Stroke, TextStyle, pos2, vec2,
 };
@@ -44,8 +44,10 @@ impl TextView {
     fn rows_ui(&self, ui: &mut egui::Ui) {
         let font = TextStyle::Monospace.resolve(ui.style());
         let char_width = ui.fonts_mut(|f| f.glyph_width(&font, '0'));
-        let longest = self.diff.left_lines.len().max(self.diff.right_lines.len());
-        let digits = longest.max(1).ilog10() as f32 + 1.0;
+        let rows = &self.diff.rows;
+        let sides = rows.iter().flat_map(|r| [&r.left, &r.right]);
+        let last_number = sides.flatten().map(|l| l.index + 1).max().unwrap_or(1);
+        let digits = last_number.ilog10() as f32 + 1.0;
         let layout = RowLayout {
             row_height: ui.fonts_mut(|f| f.row_height(&font)).ceil(),
             half_width: ui.available_width() / 2.0,
@@ -63,7 +65,7 @@ impl TextView {
             diff.rows.len(),
             |ui, range| {
                 for row in &diff.rows[range] {
-                    layout.paint_row(ui, diff, row);
+                    layout.paint_row(ui, row);
                 }
             },
         );
@@ -90,16 +92,14 @@ struct RowLayout {
 
 impl RowLayout {
     /// Paints `row` across both halves, with a divider between them.
-    fn paint_row(&self, ui: &mut egui::Ui, diff: &SideBySide, row: &Row) {
+    fn paint_row(&self, ui: &mut egui::Ui, row: &Row) {
         let size = vec2(ui.available_width(), self.row_height);
         let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
         let painter = ui.painter();
         let (left, right) = rect.split_left_right_at_x(rect.left() + self.half_width);
         let background = background(row);
-        let left_line = row.left.map(|l| (l, diff.left_lines[l].as_str()));
-        let right_line = row.right.map(|l| (l, diff.right_lines[l].as_str()));
-        self.paint_half(painter, left, left_line, background);
-        self.paint_half(painter, right, right_line, background);
+        self.paint_half(painter, left, row.left.as_ref(), background);
+        self.paint_half(painter, right, row.right.as_ref(), background);
         painter.vline(left.right(), rect.y_range(), Stroke::new(1.0, DIVIDER));
     }
 
@@ -109,10 +109,10 @@ impl RowLayout {
         &self,
         painter: &Painter,
         half: Rect,
-        line: Option<(usize, &str)>,
+        line: Option<&Line>,
         background: Option<Color32>,
     ) {
-        let Some((index, text)) = line else {
+        let Some(line) = line else {
             painter.rect_filled(half, 0.0, FILLER_BG);
             return;
         };
@@ -121,7 +121,7 @@ impl RowLayout {
         if let Some(background) = background {
             painter.rect_filled(half, 0.0, background);
         }
-        let number = (index + 1).to_string();
+        let number = (line.index + 1).to_string();
         let pos = pos2(gutter_right - self.char_width, mid_y);
         painter.text(
             pos,
@@ -135,7 +135,7 @@ impl RowLayout {
         painter.with_clip_rect(text_rect).text(
             pos2(gutter_right, mid_y),
             Align2::LEFT_CENTER,
-            text,
+            &line.text,
             self.font.clone(),
             TEXT_FG,
         );

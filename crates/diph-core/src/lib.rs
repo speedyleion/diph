@@ -2,4 +2,4 @@
 
 mod side_by_side;
 
-pub use side_by_side::{Row, RowKind, SideBySide};
+pub use side_by_side::{Line, Row, RowKind, SideBySide};
