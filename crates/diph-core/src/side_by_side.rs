@@ -42,6 +42,8 @@ pub struct Line {
 /// walking the rows visits every line of each text once.
 pub struct SideBySide {
     pub rows: Vec<Row>,
+    /// Indices into `rows` where each run of differing rows starts.
+    pub changes: Vec<usize>,
 }
 
 impl SideBySide {
@@ -75,7 +77,13 @@ impl SideBySide {
             }
         }
 
-        Self { rows }
+        let changes = (0..rows.len())
+            .filter(|&i| {
+                rows[i].kind != RowKind::Equal && (i == 0 || rows[i - 1].kind == RowKind::Equal)
+            })
+            .collect();
+
+        Self { rows, changes }
     }
 }
 
@@ -143,6 +151,7 @@ mod tests {
             out += format!("{marker} {left:<26}| {right}").trim_end();
             out += "\n";
         }
+        out += &format!("changes at {:?}", diff.changes);
         out
     }
 
@@ -172,6 +181,7 @@ mod tests {
         < 4 gone                    |
           5 tail                    | 4 tail
         >                           | 5 extra
+        changes at [0, 2, 6]
         ");
     }
 
@@ -183,6 +193,7 @@ mod tests {
         ~ 1 let [total] = a + b;    | 1 let [sum] = a + b[ + c];
         ~ 2 foo([one, ]two)         | 2 foo(two)
           3 same                    | 3 same
+        changes at [0]
         ");
     }
 
@@ -192,6 +203,7 @@ mod tests {
         let right = "counts.entry(word.to_lowercase())\n";
         assert_snapshot!(render(&SideBySide::new(left, right)), @r"
         ~ 1 counts.entry([word.to_string]())| 1 counts.entry([word.to_lowercase]())
+        changes at [0]
         ");
     }
 
@@ -200,6 +212,7 @@ mod tests {
         let diff = SideBySide::new("café ok\n", "naïve ok\n");
         assert_snapshot!(render(&diff), @r"
         ~ 1 [café] ok               | 1 [naïve] ok
+        changes at [0]
         ");
     }
 
@@ -225,6 +238,7 @@ mod tests {
         assert_snapshot!(render(&SideBySide::new("", "a\nb")), @r"
         >                           | 1 a
         >                           | 2 b
+        changes at [0]
         ");
     }
 }
