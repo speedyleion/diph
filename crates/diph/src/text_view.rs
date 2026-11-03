@@ -2,13 +2,16 @@
 
 use diph_core::{Line, Row, RowKind, SideBySide};
 use eframe::egui::{
-    self, Align2, Color32, FontId, Painter, Rect, ScrollArea, Sense, Stroke, TextStyle, pos2, vec2,
+    self, Align2, Color32, FontId, Painter, Rect, ScrollArea, Sense, Stroke, TextFormat, TextStyle,
+    pos2, text::LayoutJob, vec2,
 };
 
 /// Background of a line with nothing opposite it.
 const ONE_SIDED_BG: Color32 = Color32::from_rgb(0x1b, 0x3d, 0x2a);
 /// Background of a line that differs from the line opposite it.
 const CHANGED_BG: Color32 = Color32::from_rgb(0x1f, 0x30, 0x4a);
+/// Background of the words that differ within a changed line.
+const CHANGED_WORD_BG: Color32 = Color32::from_rgb(0x2f, 0x55, 0x8f);
 /// Background opposite a one-sided line.
 const FILLER_BG: Color32 = Color32::from_rgb(0x22, 0x24, 0x28);
 const GUTTER_FG: Color32 = Color32::from_gray(110);
@@ -98,15 +101,17 @@ impl RowLayout {
         let painter = ui.painter();
         let (left, right) = rect.split_left_right_at_x(rect.left() + self.half_width);
         let background = background(row);
-        self.paint_half(painter, left, row.left.as_ref(), background);
-        self.paint_half(painter, right, row.right.as_ref(), background);
+        self.paint_half(ui, painter, left, row.left.as_ref(), background);
+        self.paint_half(ui, painter, right, row.right.as_ref(), background);
         painter.vline(left.right(), rect.y_range(), Stroke::new(1.0, DIVIDER));
     }
 
     /// Paints one half of a row: the background, the line number, and the
-    /// line text clipped to the half. A half without a line gets the filler.
+    /// line text clipped to the half, with its changed words highlighted. A
+    /// half without a line gets the filler.
     fn paint_half(
         &self,
+        ui: &egui::Ui,
         painter: &Painter,
         half: Rect,
         line: Option<&Line>,
@@ -132,12 +137,33 @@ impl RowLayout {
         );
 
         let text_rect = Rect::from_min_max(pos2(gutter_right, half.top()), half.max);
-        painter.with_clip_rect(text_rect).text(
-            pos2(gutter_right, mid_y),
-            Align2::LEFT_CENTER,
-            &line.text,
-            self.font.clone(),
-            TEXT_FG,
-        );
+        let galley = ui.fonts_mut(|f| f.layout_job(self.line_job(line)));
+        let pos = pos2(gutter_right, mid_y - galley.size().y / 2.0);
+        painter
+            .with_clip_rect(text_rect)
+            .galley(pos, galley, TEXT_FG);
+    }
+
+    /// Lays out a line with its changed words on [`CHANGED_WORD_BG`].
+    fn line_job(&self, line: &Line) -> LayoutJob {
+        let mut job = LayoutJob::default();
+        let mut pos = 0;
+        for range in &line.changed_words {
+            let unchanged = &line.text[pos..range.start];
+            job.append(unchanged, 0.0, self.format(Color32::TRANSPARENT));
+            job.append(&line.text[range.clone()], 0.0, self.format(CHANGED_WORD_BG));
+            pos = range.end;
+        }
+        job.append(&line.text[pos..], 0.0, self.format(Color32::TRANSPARENT));
+        job
+    }
+
+    fn format(&self, background: Color32) -> TextFormat {
+        TextFormat {
+            font_id: self.font.clone(),
+            color: TEXT_FG,
+            background,
+            ..Default::default()
+        }
     }
 }
