@@ -7,15 +7,15 @@ use clap::Parser;
 #[derive(Parser)]
 #[command(version)]
 struct Args {
-    /// The original file.
-    old: PathBuf,
-    /// The changed file.
-    new: PathBuf,
+    /// The file shown on the left.
+    left: PathBuf,
+    /// The file shown on the right.
+    right: PathBuf,
 }
 
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
-    for path in [&args.old, &args.new] {
+    for path in [&args.left, &args.right] {
         std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
     }
     Ok(())
