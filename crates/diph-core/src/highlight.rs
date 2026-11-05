@@ -101,13 +101,14 @@ mod tests {
             .collect()
     }
 
-    #[test]
-    fn picks_the_language_from_the_file_name() {
-        let words = colored_words("main.rs", "fn main() {}");
-        assert!(words[0].len() > 1, "{words:?}");
+    #[yare::parameterized(
+        rust_file_is_highlighted = { "main.rs", true },
+        unknown_file_is_plain = { "notes", false },
+    )]
+    fn picks_the_language_from_the_file_name(path: &str, highlighted: bool) {
+        let words = colored_words(path, "fn main() {}");
         assert_eq!(words[0].concat(), "fn main() {}");
-        let plain = colored_words("notes", "fn main() {}");
-        assert_eq!(plain, [["fn main() {}"]]);
+        assert_eq!(words[0].len() > 1, highlighted, "{words:?}");
     }
 
     #[test]
@@ -116,19 +117,12 @@ mod tests {
         assert!(words[1].len() > 1, "{words:?}");
     }
 
-    #[test]
-    fn carries_state_across_lines() {
-        let spans: Vec<_> = {
-            let lines = ["/* start".to_owned(), "fn still_a_comment".to_owned()];
-            let highlighter = Highlighter::default();
-            highlighter.highlight(Path::new("a.rs"), &lines).collect()
-        };
-        let fresh: Vec<_> = {
-            let lines = ["fn still_a_comment".to_owned()];
-            let highlighter = Highlighter::default();
-            highlighter.highlight(Path::new("a.rs"), &lines).collect()
-        };
-        assert_eq!(spans[1].len(), 1, "inside the comment: {:?}", spans[1]);
-        assert!(fresh[0].len() > 1, "outside a comment: {:?}", fresh[0]);
+    #[yare::parameterized(
+        inside_an_open_comment = { "/* start", false },
+        after_a_closed_comment = { "/* done */", true },
+    )]
+    fn carries_state_across_lines(first_line: &str, highlighted: bool) {
+        let words = colored_words("a.rs", &format!("{first_line}\nfn still_a_comment"));
+        assert_eq!(words[1].len() > 1, highlighted, "{words:?}");
     }
 }
