@@ -45,3 +45,11 @@ and `--help` text: describe what the code does now.
   accumulators when the result reads as clearly.
 - Keep closures to a couple of lines. Make anything longer a named
   function, passing in what it needs from the enclosing scope.
+
+## Tests
+
+- Give each test one arrange, act, and assert. When another case needs
+  its own setup and call, make it a separate case instead of continuing
+  the same test.
+- Cover several inputs to one behavior with a `yare::parameterized`
+  test, naming each case for what it shows.
