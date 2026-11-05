@@ -35,6 +35,11 @@ jobs:
         run: >-
           cargo about generate --locked --fail -m crates/diph/Cargo.toml
           -o target/release/THIRD_PARTY_LICENSES.md about.hbs
+      - name: Syntax definition licenses
+        shell: bash
+        run: >-
+          cargo run --release --locked -p diph-core --example syntax_licenses
+          >> target/release/THIRD_PARTY_LICENSES.md
       # Archives keep the binary's own name and, on Unix, its executable bit.
       - name: Package
         shell: bash
