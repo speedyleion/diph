@@ -872,6 +872,7 @@ dependencies = [
  "insta",
  "similar 3.2.1",
  "syntect",
+ "yare",
 ]
 
 [[package]]

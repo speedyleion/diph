@@ -13,3 +13,4 @@ syntect = "5"
 
 [dev-dependencies]
 insta = "1"
+yare = "3"
