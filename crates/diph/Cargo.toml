@@ -16,3 +16,4 @@ itertools = "0.15"
 
 [dev-dependencies]
 egui_kittest = "0.37"
+yare = "3"
