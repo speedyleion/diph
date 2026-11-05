@@ -44,6 +44,8 @@ pub struct SideBySide {
     pub rows: Vec<Row>,
     /// Indices into `rows` where each run of differing rows starts.
     pub changes: Vec<usize>,
+    pub left_line_count: usize,
+    pub right_line_count: usize,
 }
 
 impl SideBySide {
@@ -85,7 +87,12 @@ impl SideBySide {
             }
         }
 
-        Self { rows, changes }
+        Self {
+            rows,
+            changes,
+            left_line_count: left_lines.len(),
+            right_line_count: right_lines.len(),
+        }
     }
 }
 
@@ -238,6 +245,16 @@ mod tests {
     fn ignores_line_ending_differences() {
         let diff = SideBySide::new("a\r\nb\r\nc", "a\nb\nc\n");
         assert!(diff.rows.iter().all(|r| r.kind == RowKind::Equal));
+    }
+
+    #[yare::parameterized(
+        counts_each_sides_lines = { "a\nb\nc\n", "a\n", [3, 1] },
+        empty_text_has_no_lines = { "", "a\n", [0, 1] },
+        counts_a_last_line_without_a_newline = { "a\nb", "a\nb\n", [2, 2] },
+    )]
+    fn line_counts(left: &str, right: &str, expected: [usize; 2]) {
+        let diff = SideBySide::new(left, right);
+        assert_eq!([diff.left_line_count, diff.right_line_count], expected);
     }
 
     #[test]

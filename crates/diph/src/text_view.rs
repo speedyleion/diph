@@ -134,9 +134,8 @@ impl TextView {
         let font = TextStyle::Monospace.resolve(ui.style());
         let char_width = ui.fonts_mut(|f| f.glyph_width(&font, '0'));
         let rows = &self.diff.rows;
-        let sides = rows.iter().flat_map(|r| [&r.left, &r.right]);
-        let last_number = sides.flatten().map(|l| l.index + 1).max().unwrap_or(1);
-        let digits = last_number.ilog10() as f32 + 1.0;
+        let line_count = self.diff.left_line_count.max(self.diff.right_line_count);
+        let digits = line_count.max(1).ilog10() as f32 + 1.0;
         let layout = RowLayout {
             row_height: ui.fonts_mut(|f| f.row_height(&font)).ceil(),
             half_width: ui.available_width() / 2.0,
