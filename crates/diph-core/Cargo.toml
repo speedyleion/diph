@@ -1,6 +1,6 @@
 [package]
 name = "diph-core"
-description = "Line diffing for diph"
+description = "Line diffing and syntax highlighting for diph"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,6 +9,7 @@ repository.workspace = true
 
 [dependencies]
 similar = { version = "3", features = ["unicode"] }
+syntect = "5"
 
 [dev-dependencies]
 insta = "1"

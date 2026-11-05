@@ -12,6 +12,7 @@ anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 diph-core = { path = "../diph-core" }
 eframe = "0.37"
+itertools = "0.15"
 
 [dev-dependencies]
 egui_kittest = "0.37"
