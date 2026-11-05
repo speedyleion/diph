@@ -26,8 +26,15 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about
       - name: Build
         run: cargo build --release --locked -p diph
+      - name: Third-party licenses
+        run: >-
+          cargo about generate --locked --fail -m crates/diph/Cargo.toml
+          -o target/release/THIRD_PARTY_LICENSES.md about.hbs
       # Archives keep the binary's own name and, on Unix, its executable bit.
       - name: Package
         shell: bash
@@ -35,10 +42,10 @@ jobs:
           name="diph-$TAG-${{ matrix.target }}"
           cd target/release
           if [ "$RUNNER_OS" = Windows ]; then
-            7z a "$name.zip" diph.exe
+            7z a "$name.zip" diph.exe THIRD_PARTY_LICENSES.md
             echo "ASSET=target/release/$name.zip" >> "$GITHUB_ENV"
           else
-            tar -czf "$name.tar.gz" diph
+            tar -czf "$name.tar.gz" diph THIRD_PARTY_LICENSES.md
             echo "ASSET=target/release/$name.tar.gz" >> "$GITHUB_ENV"
           fi
       - name: Attach to the release
