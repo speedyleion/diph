@@ -8,3 +8,10 @@ edition = "2024"
 rust-version = "1.98"
 license = "BSL-1.0"
 repository = "https://github.com/speedyleion/diph"
+
+# Smaller release binaries. Not opt-level = 'z': egui lays out the whole
+# UI on every frame it draws, so speed matters more than the last few MB.
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
