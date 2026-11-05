@@ -41,6 +41,11 @@ and `--help` text: describe what the code does now.
 - Before writing an algorithm by hand, check whether an existing
   dependency already provides it.
 - Name fields after what they hold (`deleted_words`, not `old_changed`).
+- Use a struct with named fields, not a tuple, for data that is stored,
+  sent between threads, or given a type alias. Keep tuples for values
+  destructured right away, such as an iterator's pairs.
+- When a nested collection's layers mean different things, wrap a layer
+  in a named type (`SideColors`, not `Vec<Vec<Span>>`).
 - Prefer iterator chains and `collect()` to `for` loops over `mut`
   accumulators when the result reads as clearly.
 - Keep closures to a couple of lines. Make anything longer a named
