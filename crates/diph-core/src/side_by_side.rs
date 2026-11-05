@@ -55,8 +55,14 @@ impl SideBySide {
         let diff = TextDiff::from_slices(&left_lines, &right_lines);
 
         let mut rows = Vec::new();
+        let mut changes = Vec::new();
         for op in diff.ops() {
             let (tag, left, right) = op.as_tag_tuple();
+            // similar merges neighboring deletes and inserts into one op, so
+            // each differing op is a change of its own.
+            if tag != DiffTag::Equal {
+                changes.push(rows.len());
+            }
             // Pair lines from the top of each block. In a changed block the
             // longer side's leftovers have nothing opposite them.
             for i in 0..left.len().max(right.len()) {
@@ -78,12 +84,6 @@ impl SideBySide {
                 });
             }
         }
-
-        let changes = (0..rows.len())
-            .filter(|&i| {
-                rows[i].kind != RowKind::Equal && (i == 0 || rows[i - 1].kind == RowKind::Equal)
-            })
-            .collect();
 
         Self { rows, changes }
     }
