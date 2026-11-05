@@ -151,14 +151,13 @@ impl TextView {
         if let Some(row) = self.scroll_to_row.take() {
             // Clamped so changes near the end don't overscroll and bounce back.
             let row_height = layout.row_height;
-            let max_offset = self.diff.rows.len() as f32 * row_height - ui.available_height();
+            let max_offset = rows.len() as f32 * row_height - ui.available_height();
             let offset = row.saturating_sub(CONTEXT_ROWS) as f32 * row_height;
             area = area.vertical_scroll_offset(offset.min(max_offset).max(0.0));
         }
-        let (diff, colors) = (&self.diff, &self.colors);
-        area.show_rows(ui, layout.row_height, diff.rows.len(), |ui, range| {
-            for row in &diff.rows[range] {
-                layout.paint_row(ui, colors, row);
+        area.show_rows(ui, layout.row_height, rows.len(), |ui, range| {
+            for row in &rows[range] {
+                layout.paint_row(ui, &self.colors, row);
             }
         });
     }
