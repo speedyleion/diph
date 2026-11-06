@@ -24,7 +24,7 @@ impl Default for Highlighter {
     fn default() -> Self {
         let mut themes = ThemeSet::load_defaults();
         Self {
-            syntaxes: SyntaxSet::load_defaults_newlines(),
+            syntaxes: two_face::syntax::extra_newlines(),
             theme: themes
                 .themes
                 .remove("base16-ocean.dark")
@@ -102,12 +102,13 @@ mod tests {
     }
 
     #[yare::parameterized(
-        rust_file_is_highlighted = { "main.rs", true },
-        unknown_file_is_plain = { "notes", false },
+        rust_file_is_highlighted = { "main.rs", "fn main() {}", true },
+        kotlin_file_is_highlighted = { "Main.kt", "fun main() {}", true },
+        unknown_file_is_plain = { "notes", "fn main() {}", false },
     )]
-    fn picks_the_language_from_the_file_name(path: &str, highlighted: bool) {
-        let words = colored_words(path, "fn main() {}");
-        assert_eq!(words[0].concat(), "fn main() {}");
+    fn picks_the_language_from_the_file_name(path: &str, code: &str, highlighted: bool) {
+        let words = colored_words(path, code);
+        assert_eq!(words[0].concat(), code);
         assert_eq!(words[0].len() > 1, highlighted, "{words:?}");
     }
 
