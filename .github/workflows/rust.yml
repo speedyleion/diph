@@ -33,6 +33,20 @@ jobs:
     - name: Run clippy
       run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
+  # Fails when a dependency's license is not accepted in about.toml or
+  # cannot be identified, which would otherwise break the release.
+  licenses:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v7
+    - uses: taiki-e/install-action@v2
+      with:
+        tool: cargo-about
+    - name: Generate third-party licenses
+      run: >-
+        cargo about generate --locked --fail -m crates/diph/Cargo.toml
+        -o THIRD_PARTY_LICENSES.md about.hbs
+
   markdown-lint:
     runs-on: ubuntu-latest
     steps:
