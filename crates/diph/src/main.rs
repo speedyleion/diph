@@ -109,14 +109,8 @@ fn side_path(path: &Path, label: Option<&Path>, other: &Path) -> PathBuf {
 fn diff_name([left, right]: &[PathBuf; 2]) -> String {
     let left = left.as_path();
     let right = right.as_path();
-    let left_name = left
-        .file_name()
-        .unwrap_or(left.as_os_str())
-        .to_str();
-    let right_name = right
-        .file_name()
-        .unwrap_or(right.as_os_str())
-        .to_str();
+    let left_name = left.file_name().unwrap_or(left.as_os_str()).to_str();
+    let right_name = right.file_name().unwrap_or(right.as_os_str()).to_str();
 
     match (left_name, right_name) {
         (Some(left), Some(right)) if left != right => format!("{left} ↔ {right}"),
