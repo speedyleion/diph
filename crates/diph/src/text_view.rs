@@ -105,8 +105,6 @@ fn keymap() -> Keymap<Action> {
 }
 
 pub struct TextView {
-    /// The text of the left and right side.
-    buffers: [Buffer; 2],
     diff: SideBySide,
     left_label: String,
     right_label: String,
@@ -135,21 +133,20 @@ pub struct TextView {
 }
 
 impl TextView {
-    /// A view of the diff of the left and right `buffers` whose status bar
-    /// shows the time from `started` to the first frame.
+    /// A view of `diff` whose status bar shows the time from `started` to
+    /// the first frame.
     pub fn new(
-        buffers: [Buffer; 2],
+        diff: SideBySide,
         left_label: String,
         right_label: String,
         started: Instant,
     ) -> Self {
-        let diff = SideBySide::new(&buffers[0], &buffers[1]);
+        let buffers = diff.buffers();
         // The right side, unless only the left has lines.
         let cursor_side = [1, 0].into_iter().find(|&s| !buffers[s].lines().is_empty());
         let mut view = Self {
             cursor_side,
             cursor: Cursor::default(),
-            buffers,
             diff,
             left_label,
             right_label,
@@ -173,7 +170,7 @@ impl TextView {
     pub fn highlight_in_background(&mut self, paths: [PathBuf; 2], ctx: egui::Context) {
         let (tx, rx) = channel();
         self.colors_rx = Some(rx);
-        let sides = self.buffers.each_ref().map(|b| b.lines().to_vec());
+        let sides = self.diff.buffers().each_ref().map(|b| b.lines().to_vec());
         std::thread::spawn(move || highlight_sides(&paths, &sides, &tx, &ctx));
     }
 
@@ -253,7 +250,7 @@ impl TextView {
     /// The side with the cursor, and where the cursor is in its buffer.
     fn cursor_position(&self) -> Option<(usize, Position)> {
         let side = self.cursor_side?;
-        Some((side, self.cursor.position(&self.buffers[side])))
+        Some((side, self.cursor.position(&self.diff.buffers()[side])))
     }
 
     /// Moves the cursor to the line of `side` across from it, keeping its
@@ -276,8 +273,8 @@ impl TextView {
         let Some(side) = self.cursor_side else {
             return;
         };
-        move_it(&mut self.cursor, &self.buffers[side]);
-        let line = self.cursor.position(&self.buffers[side]).line;
+        move_it(&mut self.cursor, &self.diff.buffers()[side]);
+        let line = self.cursor.position(&self.diff.buffers()[side]).line;
         let row = self.diff.row_of(side, line);
         let rows_in_view = self.rows_in_view.max(1);
         let top_row = self.scroll_to_top_row.unwrap_or(self.top_row);
@@ -304,7 +301,7 @@ impl TextView {
         if let Some(side) = self.cursor_side
             && let Some(line) = self.diff.line_at(side, row)
         {
-            self.cursor.go_to_line(&self.buffers[side], line);
+            self.cursor.go_to_line(&self.diff.buffers()[side], line);
         }
     }
 
@@ -315,7 +312,8 @@ impl TextView {
         let char_width = ui.fonts_mut(|f| f.glyph_width(&font, '0'));
         let rows = &self.diff.rows;
         let line_count = self
-            .buffers
+            .diff
+            .buffers()
             .iter()
             .map(|b| b.lines().len())
             .max()
@@ -344,12 +342,14 @@ impl TextView {
             // `last` paints every row, keeping the click if one was clicked.
             rows[range]
                 .iter()
-                .filter_map(|row| layout.paint_row(ui, &self.buffers, &self.colors, row, cursor))
+                .filter_map(|row| {
+                    layout.paint_row(ui, self.diff.buffers(), &self.colors, row, cursor)
+                })
                 .last()
         });
         if let Some((side, clicked)) = output.inner {
             self.cursor_side = Some(side);
-            self.cursor.set(&self.buffers[side], clicked);
+            self.cursor.set(&self.diff.buffers()[side], clicked);
         }
         let top = output.state.clamped_offset().y / layout.row_height;
         let bottom = top + output.inner_rect.height() / layout.row_height;
@@ -643,7 +643,7 @@ mod tests {
             .replace("line 15\n", "line fifteen\n")
             .replace("line 25\n", "line twenty-five\n");
         TextView::new(
-            [Buffer::new(&left), Buffer::new(&right)],
+            SideBySide::new([Buffer::new(&left), Buffer::new(&right)]),
             "left".into(),
             "right".into(),
             Instant::now(),
@@ -676,8 +676,8 @@ mod tests {
     /// Shift, a key name such as `Down`, or either with `C-` for Ctrl.
     fn typed_in_unchanged_file(keys: &str) -> Harness<'static, TextView> {
         let text: String = (0..200).map(|i| format!("line {i}\n")).collect();
-        let buffers = [Buffer::new(&text), Buffer::new(&text)];
-        let view = TextView::new(buffers, "left".into(), "right".into(), Instant::now());
+        let diff = SideBySide::new([Buffer::new(&text), Buffer::new(&text)]);
+        let view = TextView::new(diff, "left".into(), "right".into(), Instant::now());
         let mut harness = Harness::new_ui_state(|ui, view| view.show(ui), view);
         harness.run();
         for key in keys.split_whitespace() {
@@ -777,7 +777,12 @@ mod tests {
     )]
     fn the_cursor_starts(left: &str, right: &str, side: Option<usize>) {
         let buffers = [Buffer::new(left), Buffer::new(right)];
-        let view = TextView::new(buffers, "left".into(), "right".into(), Instant::now());
+        let view = TextView::new(
+            SideBySide::new(buffers),
+            "left".into(),
+            "right".into(),
+            Instant::now(),
+        );
         assert_eq!(view.cursor_side, side);
     }
 
@@ -795,7 +800,7 @@ mod tests {
         let left: Vec<_> = (0..lines).map(|i| format!("line {i}\n")).collect();
         let mut right = left.clone();
         right[changed.clone()].fill("changed\n".to_owned());
-        let diff = SideBySide::new(&Buffer::new(&left.concat()), &Buffer::new(&right.concat()));
+        let diff = SideBySide::new([Buffer::new(&left.concat()), Buffer::new(&right.concat())]);
         let map = Rect::from_min_size(pos2(0.0, 0.0), vec2(10.0, 100.0));
 
         let y = map_y(map, diff.rows.len(), rows_in_view);
@@ -811,7 +816,7 @@ mod tests {
         added_lines_mark_the_right_column = { "a\nd\n", "a\nb\nc\nd\n", 5.0..=10.0 },
     )]
     fn one_sided_marks(left: &str, right: &str, x_range: std::ops::RangeInclusive<f32>) {
-        let diff = SideBySide::new(&Buffer::new(left), &Buffer::new(right));
+        let diff = SideBySide::new([Buffer::new(left), Buffer::new(right)]);
         let map = Rect::from_min_size(pos2(0.0, 0.0), vec2(10.0, 100.0));
 
         let marks = super::change_marks(&diff.rows, map, map_y(map, diff.rows.len(), 4.0));
