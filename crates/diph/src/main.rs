@@ -1,3 +1,4 @@
+mod cursor;
 mod keymap;
 mod text_view;
 

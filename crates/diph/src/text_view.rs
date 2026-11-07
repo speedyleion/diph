@@ -2,19 +2,22 @@
 
 use std::ops::Range;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant};
 
 use diph_core::{Highlighter, Line, Row, RowKind, SideBySide, Span};
 use eframe::egui::{
-    self, Align2, Color32, FontId, Key, KeyboardShortcut, Modifiers, Painter, Rect, ScrollArea,
-    Sense, Stroke, TextFormat, TextStyle, UiBuilder, pos2, text::LayoutJob, vec2,
+    self, Align2, Color32, CursorIcon, FontId, Galley, Key, KeyboardShortcut, Modifiers, Painter,
+    Pos2, Rect, ScrollArea, Sense, Stroke, TextFormat, TextStyle, UiBuilder, epaint::text::Glyph,
+    pos2, text::LayoutJob, vec2,
 };
 use itertools::{
     EitherOrBoth::{Both, Left, Right},
     Itertools as _,
 };
 
+use crate::cursor::{Cursor, Position};
 use crate::keymap::Keymap;
 
 /// Background of a line with nothing opposite it.
@@ -28,6 +31,9 @@ const FILLER_BG: Color32 = Color32::from_rgb(0x22, 0x24, 0x28);
 const GUTTER_FG: Color32 = Color32::from_gray(110);
 const TEXT_FG: Color32 = Color32::from_gray(210);
 const DIVIDER: Color32 = Color32::from_gray(60);
+const CURSOR_BG: Color32 = TEXT_FG;
+/// Color of the character under the cursor.
+const CURSOR_FG: Color32 = Color32::from_gray(20);
 /// Change map mark of one-sided lines.
 const ONE_SIDED_MARK: Color32 = Color32::from_rgb(0x2f, 0x8f, 0x55);
 /// Change map mark of changed lines.
@@ -58,26 +64,43 @@ struct ColorsChunk {
 enum Action {
     PrevChange,
     NextChange,
+    CharLeft,
+    CharRight,
     LineDown,
     LineUp,
-    Top,
-    Bottom,
+    FirstLine,
+    LastLine,
+    LeftSide,
+    RightSide,
 }
 
-/// p or Shift+F7 and n or F7 step through changes, j and k scroll a line,
-/// and gg and G scroll to the top and bottom.
+/// p or Shift+F7 and n or F7 step through changes. h, j, k, and l or the
+/// arrow keys move the cursor a character or a line, gg and G move it to
+/// the first and last line, and Ctrl+W h and Ctrl+W l move it to the left
+/// and right side.
 fn keymap() -> Keymap<Action> {
     let key = |key| KeyboardShortcut::new(Modifiers::NONE, key);
     let shift = |key| KeyboardShortcut::new(Modifiers::SHIFT, key);
+    let ctrl = |key| KeyboardShortcut::new(Modifiers::CTRL, key);
     Keymap::new([
         (vec![key(Key::P)], Action::PrevChange),
         (vec![shift(Key::F7)], Action::PrevChange),
         (vec![key(Key::N)], Action::NextChange),
         (vec![key(Key::F7)], Action::NextChange),
+        (vec![key(Key::H)], Action::CharLeft),
+        (vec![key(Key::ArrowLeft)], Action::CharLeft),
+        (vec![key(Key::L)], Action::CharRight),
+        (vec![key(Key::ArrowRight)], Action::CharRight),
         (vec![key(Key::J)], Action::LineDown),
+        (vec![key(Key::ArrowDown)], Action::LineDown),
         (vec![key(Key::K)], Action::LineUp),
-        (vec![key(Key::G), key(Key::G)], Action::Top),
-        (vec![shift(Key::G)], Action::Bottom),
+        (vec![key(Key::ArrowUp)], Action::LineUp),
+        (vec![key(Key::G), key(Key::G)], Action::FirstLine),
+        (vec![shift(Key::G)], Action::LastLine),
+        (vec![ctrl(Key::W), key(Key::H)], Action::LeftSide),
+        (vec![ctrl(Key::W), ctrl(Key::H)], Action::LeftSide),
+        (vec![ctrl(Key::W), key(Key::L)], Action::RightSide),
+        (vec![ctrl(Key::W), ctrl(Key::L)], Action::RightSide),
     ])
 }
 
@@ -89,8 +112,12 @@ pub struct TextView {
     current_change: Option<usize>,
     /// Row to scroll to the top of the view on the next frame.
     scroll_to_top_row: Option<usize>,
-    /// Row at the top of the view in the last frame.
+    /// Top row wholly in view in the last frame.
     top_row: usize,
+    /// Rows wholly in view in the last frame.
+    rows_in_view: usize,
+    /// `None` when neither side has lines.
+    cursor: Option<Cursor>,
     keymap: Keymap<Action>,
     /// Syntax colors of the left and right side, filled in from the top as
     /// the background highlighter delivers them.
@@ -112,12 +139,14 @@ impl TextView {
         started: Instant,
     ) -> Self {
         let mut view = Self {
+            cursor: Cursor::new(&diff),
             diff,
             left_label,
             right_label,
             current_change: None,
             scroll_to_top_row: None,
             top_row: 0,
+            rows_in_view: 0,
             keymap: keymap(),
             colors: Default::default(),
             colors_rx: None,
@@ -204,21 +233,36 @@ impl TextView {
         match action {
             Action::PrevChange => self.step_change(-1),
             Action::NextChange => self.step_change(1),
-            Action::LineDown => self.scroll_by(1),
-            Action::LineUp => self.scroll_by(-1),
-            Action::Top => self.scroll_to_top_row = Some(0),
-            // Scrolling stops once the last row is in view.
-            Action::Bottom => self.scroll_to_top_row = Some(self.diff.rows.len()),
+            Action::CharLeft => self.move_cursor(|c| c.move_column(-1)),
+            Action::CharRight => self.move_cursor(|c| c.move_column(1)),
+            Action::LineDown => self.move_cursor(|c| c.move_line(1)),
+            Action::LineUp => self.move_cursor(|c| c.move_line(-1)),
+            Action::FirstLine => self.move_cursor(|c| c.go_to_line(0)),
+            Action::LastLine => self.move_cursor(|c| c.go_to_line(usize::MAX)),
+            Action::LeftSide => self.move_cursor(|c| c.go_to_row(0, c.row())),
+            Action::RightSide => self.move_cursor(|c| c.go_to_row(1, c.row())),
         }
     }
 
-    /// Scrolls `delta` rows down or up from where the view is headed.
-    fn scroll_by(&mut self, delta: isize) {
+    /// Moves the cursor with `move_it`, then scrolls the least that brings
+    /// its row into view.
+    fn move_cursor(&mut self, move_it: impl FnOnce(&mut Cursor)) {
+        let Some(cursor) = &mut self.cursor else {
+            return;
+        };
+        move_it(cursor);
+        let row = cursor.row();
+        let rows_in_view = self.rows_in_view.max(1);
         let top_row = self.scroll_to_top_row.unwrap_or(self.top_row);
-        self.scroll_to_top_row = Some(top_row.saturating_add_signed(delta));
+        if row < top_row {
+            self.scroll_to_top_row = Some(row);
+        } else if row >= top_row + rows_in_view {
+            self.scroll_to_top_row = Some(row + 1 - rows_in_view);
+        }
     }
 
-    /// Moves `delta` changes forward or back, stopping at the first and last.
+    /// Moves `delta` changes forward or back, stopping at the first and last,
+    /// and moves the cursor to the change on its side.
     fn step_change(&mut self, delta: isize) {
         let Some(last) = self.diff.changes.len().checked_sub(1) else {
             return;
@@ -228,7 +272,11 @@ impl TextView {
             Some(c) => c.saturating_add_signed(delta).min(last),
         };
         self.current_change = Some(next);
-        self.scroll_to_top_row = Some(self.diff.changes[next].saturating_sub(CONTEXT_ROWS));
+        let row = self.diff.changes[next];
+        self.scroll_to_top_row = Some(row.saturating_sub(CONTEXT_ROWS));
+        if let Some(cursor) = &mut self.cursor {
+            cursor.go_to_row(cursor.position().side, row);
+        }
     }
 
     /// Both halves live in one scroll area so they always scroll together.
@@ -257,14 +305,21 @@ impl TextView {
             let offset = row as f32 * row_height;
             area = area.vertical_scroll_offset(offset.min(max_offset).max(0.0));
         }
+        let cursor = self.cursor.as_ref().map(Cursor::position);
         let output = area.show_rows(ui, layout.row_height, rows.len(), |ui, range| {
-            for row in &rows[range] {
-                layout.paint_row(ui, &self.colors, row);
-            }
+            // `last` paints every row, keeping the click if one was clicked.
+            (rows[range].iter())
+                .filter_map(|row| layout.paint_row(ui, &self.colors, row, cursor))
+                .last()
         });
+        if let (Some(cursor), Some(clicked)) = (&mut self.cursor, output.inner) {
+            cursor.set(clicked);
+        }
         let top = output.state.clamped_offset().y / layout.row_height;
-        self.top_row = top as usize;
-        top..top + output.inner_rect.height() / layout.row_height
+        let bottom = top + output.inner_rect.height() / layout.row_height;
+        self.top_row = top.ceil() as usize;
+        self.rows_in_view = (bottom.floor() as usize).saturating_sub(self.top_row);
+        top..bottom
     }
 }
 
@@ -384,35 +439,77 @@ struct RowLayout {
 }
 
 impl RowLayout {
-    /// Paints `row` across both halves, with a divider between them.
-    fn paint_row(&self, ui: &mut egui::Ui, colors: &[SideColors; 2], row: &Row) {
+    /// Paints `row` across both halves, with a divider between them, and
+    /// `cursor` if it is on one of the row's lines. Returns the character a
+    /// click on a line's half was on.
+    fn paint_row(
+        &self,
+        ui: &mut egui::Ui,
+        colors: &[SideColors; 2],
+        row: &Row,
+        cursor: Option<Position>,
+    ) -> Option<Position> {
         let size = vec2(ui.available_width(), self.row_height);
-        let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
+        let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+        let response = response.on_hover_cursor(CursorIcon::Text);
+        let click = response
+            .interact_pointer_pos()
+            .filter(|_| response.clicked());
         let painter = ui.painter();
         let (left, right) = rect.split_left_right_at_x(rect.left() + self.half_width);
         let background = background(row);
-        let left_line = row.left.as_ref().map(|l| (l, colors[0].line(l)));
-        let right_line = row.right.as_ref().map(|l| (l, colors[1].line(l)));
-        self.paint_half(ui, painter, left, left_line, background);
-        self.paint_half(ui, painter, right, right_line, background);
+        let mut clicked = None;
+        for (side, (half, line)) in [(left, &row.left), (right, &row.right)]
+            .into_iter()
+            .enumerate()
+        {
+            let Some(line) = line else {
+                painter.rect_filled(half, 0.0, FILLER_BG);
+                continue;
+            };
+            let spans = colors[side].line(line);
+            let (pos, galley) = self.paint_half(ui, painter, half, line, spans, background);
+            let glyphs = galley.rows.first().map_or(&[][..], |r| &r.glyphs);
+            if let Some(c) = cursor.filter(|c| c.side == side && c.line == line.index) {
+                self.paint_cursor(painter, half, pos, glyphs.get(c.column));
+            }
+            if let Some(click) = click.filter(|p| half.contains(*p)) {
+                let column = column_at(glyphs, click.x - pos.x);
+                let line = line.index;
+                clicked = Some(Position { side, line, column });
+            }
+        }
         painter.vline(left.right(), rect.y_range(), Stroke::new(1.0, DIVIDER));
+        clicked
     }
 
-    /// Paints one half of a row: the background, the line number, and the
-    /// line text in the colors of its spans, clipped to the half, with its
-    /// changed words highlighted. A half without a line gets the filler.
+    /// Paints the cursor as a block over `glyph`, a character of a line in
+    /// `half` drawn from `pos`, or over the line's start when it has none.
+    fn paint_cursor(&self, painter: &Painter, half: Rect, pos: Pos2, glyph: Option<&Glyph>) {
+        let (x, width) = glyph.map_or((0.0, self.char_width), |g| (g.pos.x, g.advance_width));
+        let block = Rect::from_x_y_ranges(pos.x + x..=pos.x + x + width, half.y_range());
+        let text_rect = Rect::from_min_max(pos2(pos.x, half.top()), half.max);
+        let painter = painter.with_clip_rect(text_rect);
+        painter.rect_filled(block, 0.0, CURSOR_BG);
+        if let Some(glyph) = glyph {
+            let (align, font) = (Align2::LEFT_CENTER, self.font.clone());
+            painter.text(block.left_center(), align, glyph.chr, font, CURSOR_FG);
+        }
+    }
+
+    /// Paints one half of a row that has a line: the background, the line
+    /// number, and the line text in the colors of its spans, clipped to the
+    /// half, with its changed words highlighted. Returns where the text
+    /// starts, and its layout.
     fn paint_half(
         &self,
         ui: &egui::Ui,
         painter: &Painter,
         half: Rect,
-        line: Option<(&Line, &[Span])>,
+        line: &Line,
+        spans: &[Span],
         background: Option<Color32>,
-    ) {
-        let Some((line, spans)) = line else {
-            painter.rect_filled(half, 0.0, FILLER_BG);
-            return;
-        };
+    ) -> (Pos2, Arc<Galley>) {
         let mid_y = half.center().y;
         let gutter_right = half.left() + self.gutter_width;
         if let Some(background) = background {
@@ -433,7 +530,8 @@ impl RowLayout {
         let pos = pos2(gutter_right, mid_y - galley.size().y / 2.0);
         painter
             .with_clip_rect(text_rect)
-            .galley(pos, galley, TEXT_FG);
+            .galley(pos, galley.clone(), TEXT_FG);
+        (pos, galley)
     }
 
     /// Lays out `line` in the colors of `spans`, with its changed words on
@@ -475,6 +573,13 @@ impl RowLayout {
         };
         job.append(text, 0.0, format);
     }
+}
+
+/// The index of the glyph of `glyphs`, laid out from 0, that `x` is on, or
+/// of the last glyph when `x` is past it.
+fn column_at(glyphs: &[Glyph], x: f32) -> usize {
+    let column = glyphs.iter().take_while(|g| g.max_x() <= x).count();
+    column.min(glyphs.len().saturating_sub(1))
 }
 
 /// Syntax colors of one side's lines, by line index.
@@ -531,45 +636,101 @@ mod tests {
         harness.get_by_label("change 2 of 3");
     }
 
-    /// The view of 200 equal lines, after typing `keys` one per frame, an
-    /// uppercase letter with Shift.
+    /// The view of 200 equal lines, after pressing `keys` one per frame.
+    /// `keys` are separated by spaces, each a character, uppercase with
+    /// Shift, a key name such as `Down`, or either with `C-` for Ctrl.
     fn typed_in_unchanged_file(keys: &str) -> Harness<'static, TextView> {
         let text: String = (0..200).map(|i| format!("line {i}\n")).collect();
         let diff = SideBySide::new(&text, &text);
         let view = TextView::new(diff, "left".into(), "right".into(), Instant::now());
         let mut harness = Harness::new_ui_state(|ui, view| view.show(ui), view);
         harness.run();
-        for c in keys.chars() {
-            let key = Key::from_name(&c.to_uppercase().to_string()).unwrap();
-            let modifiers = if c.is_uppercase() {
-                Modifiers::SHIFT
-            } else {
-                Modifiers::NONE
-            };
+        for key in keys.split_whitespace() {
+            let (modifiers, key) = key_press(key);
             harness.key_press_modifiers(modifiers, key);
             harness.run();
         }
         harness
     }
 
+    /// The modifiers and key of one key in [`typed_in_unchanged_file`]'s
+    /// notation.
+    fn key_press(key: &str) -> (Modifiers, Key) {
+        let (ctrl, name) = match key.strip_prefix("C-") {
+            Some(name) => (Modifiers::CTRL, name),
+            None => (Modifiers::NONE, key),
+        };
+        let shift = if name.len() == 1 && name != name.to_lowercase() {
+            Modifiers::SHIFT
+        } else {
+            Modifiers::NONE
+        };
+        let key = Key::from_name(&name.to_uppercase()).or(Key::from_name(name));
+        (ctrl | shift, key.unwrap())
+    }
+
     #[yare::parameterized(
-        j_scrolls_down_a_line = { "jjj", 3 },
-        k_scrolls_up_a_line = { "jjjk", 2 },
-        k_stops_at_the_top = { "k", 0 },
-        gg_scrolls_to_the_top = { "jjgg", 0 },
-        another_key_cancels_a_sequence_and_is_dropped = { "jjgjg", 2 },
-        a_new_sequence_starts_after_a_cancelled_one = { "jgjgg", 0 },
+        l_moves_right = { "l l l", 1, 0, 3 },
+        h_moves_left = { "l l l h", 1, 0, 2 },
+        j_moves_down = { "j j j", 1, 3, 0 },
+        k_moves_up = { "j j j k", 1, 2, 0 },
+        arrows_move = { "Down Down Right Up Right Right Left", 1, 1, 2 },
+        gg_moves_to_the_first_line = { "j j g g", 1, 0, 0 },
+        shift_g_moves_to_the_last_line = { "G", 1, 199, 0 },
+        ctrl_w_h_moves_to_the_left_side = { "j l C-w h", 0, 1, 1 },
+        ctrl_w_ctrl_h_moves_to_the_left_side = { "C-w C-h", 0, 0, 0 },
+        ctrl_w_l_moves_to_the_right_side = { "C-w h j C-w l", 1, 1, 0 },
+        another_key_cancels_a_sequence_and_is_dropped = { "j j g j g", 1, 2, 0 },
+        a_new_sequence_starts_after_a_cancelled_one = { "j g j g g", 1, 0, 0 },
     )]
-    fn line_keys_scroll(keys: &str, top_row: usize) {
+    fn keys_move_the_cursor(keys: &str, side: usize, line: usize, column: usize) {
         let harness = typed_in_unchanged_file(keys);
+        let cursor = harness.state().cursor.as_ref().unwrap().position();
+        assert_eq!(cursor, Position { side, line, column });
+    }
+
+    #[yare::parameterized(
+        moving_to_the_bottom_row_in_view_keeps_the_view = { 0, 0 },
+        moving_past_it_scrolls_down_as_far = { 3, 3 },
+    )]
+    fn moving_down_scrolls_once_the_cursor_leaves_the_view(past_bottom: usize, top_row: usize) {
+        let rows_in_view = typed_in_unchanged_file("").state().rows_in_view;
+        let keys = "j ".repeat(rows_in_view - 1 + past_bottom);
+        let harness = typed_in_unchanged_file(&keys);
         assert_eq!(harness.state().top_row, top_row);
     }
 
     #[test]
-    fn shift_g_scrolls_to_where_scrolling_down_stops() {
-        let bottom = typed_in_unchanged_file(&"j".repeat(250)).state().top_row;
+    fn moving_up_past_the_top_of_the_view_scrolls_it_to_the_cursor() {
+        let rows_in_view = typed_in_unchanged_file("").state().rows_in_view;
+        // G moves the cursor to the last line, at the bottom of the view.
+        let keys = format!("G {}", "k ".repeat(rows_in_view + 2));
+        let harness = typed_in_unchanged_file(&keys);
+        assert_eq!(harness.state().top_row, 199 - (rows_in_view + 2));
+    }
+
+    #[test]
+    fn shift_g_scrolls_to_where_moving_down_stops() {
+        let bottom = typed_in_unchanged_file(&"j ".repeat(250)).state().top_row;
         let harness = typed_in_unchanged_file("G");
         assert_eq!(harness.state().top_row, bottom);
+    }
+
+    #[test]
+    fn stepping_to_a_change_moves_the_cursor_to_it() {
+        let mut harness = Harness::new_ui_state(|ui, view| view.show(ui), three_changes());
+        harness.run();
+        harness.key_press(Key::N);
+        harness.run();
+        let cursor = harness.state().cursor.as_ref().unwrap().position();
+        assert_eq!(
+            cursor,
+            Position {
+                side: 1,
+                line: 15,
+                column: 0
+            }
+        );
     }
 
     #[yare::parameterized(
