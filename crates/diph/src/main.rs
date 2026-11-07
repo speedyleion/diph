@@ -2,6 +2,7 @@ mod text_view;
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use anyhow::Context as _;
 use clap::{CommandFactory as _, Parser, error::ErrorKind};
@@ -119,6 +120,7 @@ fn is_binary(bytes: &[u8]) -> bool {
 }
 
 fn main() -> anyhow::Result<()> {
+    let started = Instant::now();
     let args = Args::try_parse_args(std::env::args_os()).unwrap_or_else(|e| e.exit());
     let paths = args.side_paths();
     let name = diff_name(&paths);
@@ -135,7 +137,7 @@ fn main() -> anyhow::Result<()> {
         shown(&args.left, args.label(0)),
         shown(&args.right, args.label(1)),
     );
-    let mut view = TextView::new(diff, left_label, right_label);
+    let mut view = TextView::new(diff, left_label, right_label, started);
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()

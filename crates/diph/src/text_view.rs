@@ -2,6 +2,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender, channel};
+use std::time::{Duration, Instant};
 
 use diph_core::{Highlighter, Line, Row, RowKind, SideBySide, Span};
 use eframe::egui::{
@@ -50,10 +51,21 @@ pub struct TextView {
     /// the background highlighter delivers them.
     colors: [SideColors; 2],
     colors_rx: Option<Receiver<ColorsChunk>>,
+    /// When diph started.
+    started: Instant,
+    /// Time from `started` to the first frame.
+    startup_time: Option<Duration>,
 }
 
 impl TextView {
-    pub fn new(diff: SideBySide, left_label: String, right_label: String) -> Self {
+    /// A view of `diff` whose status bar shows the time from `started` to
+    /// the first frame.
+    pub fn new(
+        diff: SideBySide,
+        left_label: String,
+        right_label: String,
+        started: Instant,
+    ) -> Self {
         let mut view = Self {
             diff,
             left_label,
@@ -62,6 +74,8 @@ impl TextView {
             scroll_to_row: None,
             colors: Default::default(),
             colors_rx: None,
+            started,
+            startup_time: None,
         };
         view.step_change(1);
         view
@@ -82,6 +96,8 @@ impl TextView {
     }
 
     pub fn show(&mut self, ui: &mut egui::Ui) {
+        let started = self.started;
+        let startup_time = *self.startup_time.get_or_insert_with(|| started.elapsed());
         if let Some(rx) = &self.colors_rx {
             for chunk in rx.try_iter() {
                 self.colors[chunk.side].lines.extend(chunk.lines);
@@ -112,6 +128,9 @@ impl TextView {
                 cols[0].monospace(&self.left_label);
                 cols[1].monospace(&self.right_label);
             });
+        });
+        egui::Panel::bottom("status_bar").show(ui, |ui| {
+            ui.weak(format!("started in {} ms", startup_time.as_millis()));
         });
         egui::CentralPanel::default().show(ui, |ui| self.rows_ui(ui));
     }
@@ -358,6 +377,7 @@ mod tests {
             SideBySide::new(&left, &right),
             "left".into(),
             "right".into(),
+            Instant::now(),
         )
     }
 
