@@ -116,8 +116,11 @@ pub struct TextView {
     top_row: usize,
     /// Rows wholly in view in the last frame.
     rows_in_view: usize,
-    /// `None` when neither side has lines.
-    cursor: Option<Cursor>,
+    /// The side with the cursor, 0 for the left and 1 for the right. `None`
+    /// when neither side has lines.
+    cursor_side: Option<usize>,
+    /// The cursor in the buffer of `cursor_side`.
+    cursor: Cursor,
     keymap: Keymap<Action>,
     /// Syntax colors of the left and right side, filled in from the top as
     /// the background highlighter delivers them.
@@ -138,8 +141,12 @@ impl TextView {
         right_label: String,
         started: Instant,
     ) -> Self {
+        let buffers = diff.buffers();
+        // The right side, unless only the left has lines.
+        let cursor_side = [1, 0].into_iter().find(|&s| !buffers[s].lines().is_empty());
         let mut view = Self {
-            cursor: Cursor::new(&diff),
+            cursor_side,
+            cursor: Cursor::default(),
             diff,
             left_label,
             right_label,
@@ -229,25 +236,46 @@ impl TextView {
         match action {
             Action::PrevChange => self.step_change(-1),
             Action::NextChange => self.step_change(1),
-            Action::CharLeft => self.move_cursor(|c| c.move_column(-1)),
-            Action::CharRight => self.move_cursor(|c| c.move_column(1)),
-            Action::LineDown => self.move_cursor(|c| c.move_line(1)),
-            Action::LineUp => self.move_cursor(|c| c.move_line(-1)),
-            Action::FirstLine => self.move_cursor(|c| c.go_to_line(0)),
-            Action::LastLine => self.move_cursor(|c| c.go_to_line(usize::MAX)),
-            Action::LeftSide => self.move_cursor(|c| c.go_to_row(0, c.row())),
-            Action::RightSide => self.move_cursor(|c| c.go_to_row(1, c.row())),
+            Action::CharLeft => self.move_cursor(|c, b| c.move_column(b, -1)),
+            Action::CharRight => self.move_cursor(|c, b| c.move_column(b, 1)),
+            Action::LineDown => self.move_cursor(|c, b| c.move_line(b, 1)),
+            Action::LineUp => self.move_cursor(|c, b| c.move_line(b, -1)),
+            Action::FirstLine => self.move_cursor(|c, b| c.go_to_line(b, 0)),
+            Action::LastLine => self.move_cursor(|c, b| c.go_to_line(b, usize::MAX)),
+            Action::LeftSide => self.switch_side(0),
+            Action::RightSide => self.switch_side(1),
         }
     }
 
-    /// Moves the cursor with `move_it`, then scrolls the least that brings
-    /// its row into view.
-    fn move_cursor(&mut self, move_it: impl FnOnce(&mut Cursor)) {
-        let Some(cursor) = &mut self.cursor else {
+    /// The side with the cursor, and where the cursor is in its buffer.
+    fn cursor_position(&self) -> Option<(usize, Position)> {
+        let side = self.cursor_side?;
+        Some((side, self.cursor.position(&self.diff.buffers()[side])))
+    }
+
+    /// Moves the cursor to the line of `side` across from it, keeping its
+    /// column. Stays put when `side` has no lines.
+    fn switch_side(&mut self, side: usize) {
+        let Some((from, position)) = self.cursor_position() else {
             return;
         };
-        move_it(cursor);
-        let row = cursor.row();
+        let row = self.diff.row_of(from, position.line);
+        let Some(line) = self.diff.line_at(side, row) else {
+            return;
+        };
+        self.cursor_side = Some(side);
+        self.move_cursor(|c, b| c.go_to_line(b, line));
+    }
+
+    /// Moves the cursor in its buffer with `move_it`, then scrolls the least
+    /// that brings its row into view.
+    fn move_cursor(&mut self, move_it: impl FnOnce(&mut Cursor, &Buffer)) {
+        let Some(side) = self.cursor_side else {
+            return;
+        };
+        move_it(&mut self.cursor, &self.diff.buffers()[side]);
+        let line = self.cursor.position(&self.diff.buffers()[side]).line;
+        let row = self.diff.row_of(side, line);
         let rows_in_view = self.rows_in_view.max(1);
         let top_row = self.scroll_to_top_row.unwrap_or(self.top_row);
         if row < top_row {
@@ -270,8 +298,10 @@ impl TextView {
         self.current_change = Some(next);
         let row = self.diff.changes[next];
         self.scroll_to_top_row = Some(row.saturating_sub(CONTEXT_ROWS));
-        if let Some(cursor) = &mut self.cursor {
-            cursor.go_to_row(cursor.position().side, row);
+        if let Some(side) = self.cursor_side
+            && let Some(line) = self.diff.line_at(side, row)
+        {
+            self.cursor.go_to_line(&self.diff.buffers()[side], line);
         }
     }
 
@@ -307,7 +337,7 @@ impl TextView {
             let offset = row as f32 * row_height;
             area = area.vertical_scroll_offset(offset.min(max_offset).max(0.0));
         }
-        let cursor = self.cursor.as_ref().map(Cursor::position);
+        let cursor = self.cursor_position();
         let output = area.show_rows(ui, layout.row_height, rows.len(), |ui, range| {
             // `last` paints every row, keeping the click if one was clicked.
             rows[range]
@@ -317,8 +347,9 @@ impl TextView {
                 })
                 .last()
         });
-        if let (Some(cursor), Some(clicked)) = (&mut self.cursor, output.inner) {
-            cursor.set(clicked);
+        if let Some((side, clicked)) = output.inner {
+            self.cursor_side = Some(side);
+            self.cursor.set(&self.diff.buffers()[side], clicked);
         }
         let top = output.state.clamped_offset().y / layout.row_height;
         let bottom = top + output.inner_rect.height() / layout.row_height;
@@ -440,16 +471,17 @@ struct RowLayout {
 
 impl RowLayout {
     /// Paints `row` across both halves, with each side's text from its
-    /// buffer, a divider between them, and `cursor` if it is on one of the
-    /// row's lines. Returns the character a click on a line's half was on.
+    /// buffer, a divider between them, and the cursor if it is on one of the
+    /// row's lines, given as its side and position. Returns the side and
+    /// position of the character a click on a line's half was on.
     fn paint_row(
         &self,
         ui: &mut egui::Ui,
         buffers: &[Buffer; 2],
         colors: &[SideColors; 2],
         row: &Row,
-        cursor: Option<Position>,
-    ) -> Option<Position> {
+        cursor: Option<(usize, Position)>,
+    ) -> Option<(usize, Position)> {
         let size = vec2(ui.available_width(), self.row_height);
         let (rect, response) = ui.allocate_exact_size(size, Sense::click());
         let response = response.on_hover_cursor(CursorIcon::Text);
@@ -472,13 +504,13 @@ impl RowLayout {
             let spans = colors[side].line(line);
             let (pos, galley) = self.paint_half(ui, half, line, text, spans, background);
             let glyphs = galley.rows.first().map_or(&[][..], |r| &r.glyphs);
-            if let Some(c) = cursor.filter(|c| c.side == side && c.line == line.index) {
+            if let Some((_, c)) = cursor.filter(|(s, c)| *s == side && c.line == line.index) {
                 self.paint_cursor(painter, half, pos, glyphs.get(c.column));
             }
             if let Some(click) = click.filter(|p| half.contains(*p)) {
                 let column = column_at(glyphs, click.x - pos.x);
                 let line = line.index;
-                clicked = Some(Position { side, line, column });
+                clicked = Some((side, Position { line, column }));
             }
         }
         painter.vline(left.right(), rect.y_range(), Stroke::new(1.0, DIVIDER));
@@ -688,8 +720,8 @@ mod tests {
     )]
     fn keys_move_the_cursor(keys: &str, side: usize, line: usize, column: usize) {
         let harness = typed_in_unchanged_file(keys);
-        let cursor = harness.state().cursor.as_ref().unwrap().position();
-        assert_eq!(cursor, Position { side, line, column });
+        let cursor = harness.state().cursor_position();
+        assert_eq!(cursor, Some((side, Position { line, column })));
     }
 
     #[yare::parameterized(
@@ -725,15 +757,33 @@ mod tests {
         harness.run();
         harness.key_press(Key::N);
         harness.run();
-        let cursor = harness.state().cursor.as_ref().unwrap().position();
+        let cursor = harness.state().cursor_position();
         assert_eq!(
             cursor,
-            Position {
-                side: 1,
-                line: 15,
-                column: 0
-            }
+            Some((
+                1,
+                Position {
+                    line: 15,
+                    column: 0
+                }
+            ))
         );
+    }
+
+    #[yare::parameterized(
+        on_the_right_side = { "a\n", "b\n", Some(1) },
+        on_the_left_side_when_the_right_has_no_lines = { "a\n", "", Some(0) },
+        on_no_side_when_neither_has_lines = { "", "", None },
+    )]
+    fn the_cursor_starts(left: &str, right: &str, side: Option<usize>) {
+        let buffers = [Buffer::new(left), Buffer::new(right)];
+        let view = TextView::new(
+            SideBySide::new(buffers),
+            "left".into(),
+            "right".into(),
+            Instant::now(),
+        );
+        assert_eq!(view.cursor_side, side);
     }
 
     #[yare::parameterized(
