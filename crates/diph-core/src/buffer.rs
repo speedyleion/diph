@@ -12,6 +12,7 @@ pub struct Position {
 }
 
 /// The lines of one side's text, without their line endings.
+#[derive(Default)]
 pub struct Buffer {
     lines: Vec<String>,
 }

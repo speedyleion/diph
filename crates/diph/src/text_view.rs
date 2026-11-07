@@ -110,7 +110,7 @@ pub struct TextView {
     diff: SideBySide,
     left_label: String,
     right_label: String,
-    /// Index into `diff.changes` of the change last jumped to.
+    /// Index into `diff.changes()` of the change last jumped to.
     current_change: Option<usize>,
     /// Row to scroll to the top of the view on the next frame.
     scroll_to_top_row: Option<usize>,
@@ -200,7 +200,7 @@ impl TextView {
                 let current = self
                     .current_change
                     .map_or("–".to_owned(), |c| (c + 1).to_string());
-                ui.label(format!("change {current} of {}", self.diff.changes.len()));
+                ui.label(format!("change {current} of {}", self.diff.changes().len()));
             });
             ui.columns(2, |cols| {
                 cols[0].monospace(&self.left_label);
@@ -221,10 +221,10 @@ impl TextView {
         let rows_builder = UiBuilder::new().max_rect(rows_rect);
         let in_view = ui.scope_builder(rows_builder, |ui| self.rows_ui(ui)).inner;
 
-        let y = map_y(map, self.diff.rows.len(), in_view.end - in_view.start);
+        let y = map_y(map, self.diff.rows().len(), in_view.end - in_view.start);
         let painter = ui.painter();
         painter.rect_filled(map, 0.0, FILLER_BG);
-        for (mark, color) in change_marks(&self.diff.rows, map, &y) {
+        for (mark, color) in change_marks(self.diff.rows(), map, &y) {
             painter.rect_filled(mark, 0.0, color);
         }
         let cover = Rect::from_x_y_ranges(map.x_range(), y(in_view.start)..=y(in_view.end));
@@ -288,7 +288,7 @@ impl TextView {
     /// Moves `delta` changes forward or back, stopping at the first and last,
     /// and moves the cursor to the change on its side.
     fn step_change(&mut self, delta: isize) {
-        let Some(last) = self.diff.changes.len().checked_sub(1) else {
+        let Some(last) = self.diff.changes().len().checked_sub(1) else {
             return;
         };
         let next = match self.current_change {
@@ -296,7 +296,7 @@ impl TextView {
             Some(c) => c.saturating_add_signed(delta).min(last),
         };
         self.current_change = Some(next);
-        let row = self.diff.changes[next];
+        let row = self.diff.changes()[next];
         self.scroll_to_top_row = Some(row.saturating_sub(CONTEXT_ROWS));
         if let Some(side) = self.cursor_side
             && let Some(line) = self.diff.line_at(side, row)
@@ -310,7 +310,7 @@ impl TextView {
     fn rows_ui(&mut self, ui: &mut egui::Ui) -> Range<f32> {
         let font = TextStyle::Monospace.resolve(ui.style());
         let char_width = ui.fonts_mut(|f| f.glyph_width(&font, '0'));
-        let rows = &self.diff.rows;
+        let rows = self.diff.rows();
         let line_count = self
             .diff
             .buffers()
@@ -803,8 +803,8 @@ mod tests {
         let diff = SideBySide::new([Buffer::new(&left.concat()), Buffer::new(&right.concat())]);
         let map = Rect::from_min_size(pos2(0.0, 0.0), vec2(10.0, 100.0));
 
-        let y = map_y(map, diff.rows.len(), rows_in_view);
-        let marks = super::change_marks(&diff.rows, map, y);
+        let y = map_y(map, diff.rows().len(), rows_in_view);
+        let marks = super::change_marks(diff.rows(), map, y);
 
         let left = Rect::from_x_y_ranges(0.0..=5.0, y_range.clone());
         let right = Rect::from_x_y_ranges(5.0..=10.0, y_range);
@@ -819,7 +819,7 @@ mod tests {
         let diff = SideBySide::new([Buffer::new(left), Buffer::new(right)]);
         let map = Rect::from_min_size(pos2(0.0, 0.0), vec2(10.0, 100.0));
 
-        let marks = super::change_marks(&diff.rows, map, map_y(map, diff.rows.len(), 4.0));
+        let marks = super::change_marks(diff.rows(), map, map_y(map, diff.rows().len(), 4.0));
 
         let mark = Rect::from_x_y_ranges(x_range, 25.0..=75.0);
         assert_eq!(marks, vec![(mark, ONE_SIDED_MARK)]);

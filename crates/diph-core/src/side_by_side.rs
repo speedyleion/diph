@@ -42,9 +42,9 @@ pub struct Line {
 pub struct SideBySide {
     /// The left and right buffer, whose lines the rows name by index.
     buffers: [Buffer; 2],
-    pub rows: Vec<Row>,
+    rows: Vec<Row>,
     /// Indices into `rows` where each run of differing rows starts.
-    pub changes: Vec<usize>,
+    changes: Vec<usize>,
     /// For the left and right side, the index into `rows` of each line.
     line_rows: [Vec<usize>; 2],
 }
@@ -107,6 +107,24 @@ impl SideBySide {
         &self.buffers
     }
 
+    pub fn rows(&self) -> &[Row] {
+        &self.rows
+    }
+
+    /// Indices into [`Self::rows`] where each run of differing rows starts.
+    pub fn changes(&self) -> &[usize] {
+        &self.changes
+    }
+
+    /// Edits the buffer of `side`, 0 for the left and 1 for the right, with
+    /// `edit`, then aligns the rows to the edited text. Returns what `edit`
+    /// returns.
+    pub fn edit<R>(&mut self, side: usize, edit: impl FnOnce(&mut Buffer) -> R) -> R {
+        let edited = edit(&mut self.buffers[side]);
+        *self = Self::new(std::mem::take(&mut self.buffers));
+        edited
+    }
+
     /// The index into `rows` of the `line`th line of `side`, 0 for the left
     /// side and 1 for the right.
     pub fn row_of(&self, side: usize, line: usize) -> usize {
@@ -161,6 +179,7 @@ fn ranges_in(line: &str, slices: &[(ChangeTag, &str)], tag: ChangeTag) -> Vec<Ra
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Position;
     use insta::assert_snapshot;
 
     /// Draws the rows of the diff of `left` and `right` as text: a kind
@@ -170,7 +189,7 @@ mod tests {
         let diff = SideBySide::new([Buffer::new(left), Buffer::new(right)]);
         let [left, right] = diff.buffers();
         let mut out = String::new();
-        for row in &diff.rows {
+        for row in diff.rows() {
             let marker = match row.kind {
                 RowKind::Equal => ' ',
                 RowKind::LeftOnly => '<',
@@ -182,7 +201,7 @@ mod tests {
             out += format!("{marker} {left_side:<26}| {right_side}").trim_end();
             out += "\n";
         }
-        out += &format!("changes at {:?}", diff.changes);
+        out += &format!("changes at {:?}", diff.changes());
         out
     }
 
@@ -250,7 +269,7 @@ mod tests {
     #[test]
     fn ignores_line_ending_differences() {
         let diff = SideBySide::new([Buffer::new("a\r\nb\r\nc"), Buffer::new("a\nb\nc\n")]);
-        assert!(diff.rows.iter().all(|r| r.kind == RowKind::Equal));
+        assert!(diff.rows().iter().all(|r| r.kind == RowKind::Equal));
     }
 
     #[test]
@@ -289,5 +308,33 @@ mod tests {
     fn a_side_without_lines_has_no_line_at_any_row() {
         let diff = SideBySide::new([Buffer::new(""), Buffer::new("a\n")]);
         assert_eq!(diff.line_at(0, 0), None);
+    }
+
+    /// The diff of four lines on the left against the first and last of
+    /// them on the right, after inserting the middle two on the right.
+    fn deleted_lines_put_back() -> SideBySide {
+        let mut diff = two_lines_deleted();
+        let at = Position { line: 1, column: 0 };
+        diff.edit(1, |buffer| buffer.insert(at, "b\nc\n"));
+        diff
+    }
+
+    #[test]
+    fn edit_aligns_the_rows_to_the_edited_text() {
+        let diff = deleted_lines_put_back();
+        assert!(diff.rows().iter().all(|r| r.kind == RowKind::Equal));
+    }
+
+    #[test]
+    fn edit_finds_the_edited_lines_rows() {
+        assert_eq!(deleted_lines_put_back().row_of(1, 3), 3);
+    }
+
+    #[test]
+    fn edit_returns_what_the_edit_returns() {
+        let mut diff = two_lines_deleted();
+        let at = Position { line: 0, column: 1 };
+        let past = diff.edit(0, |buffer| buffer.insert(at, "!"));
+        assert_eq!(past, Position { line: 0, column: 2 });
     }
 }
