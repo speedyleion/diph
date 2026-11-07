@@ -860,7 +860,7 @@ checksum = "9e9de72ce2ad1f90dc62fa25f0f430ef85eb4b0d8fa0be4f30373bc40a21d28e"
 
 [[package]]
 name = "diph"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -873,7 +873,7 @@ dependencies = [
 
 [[package]]
 name = "diph-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "insta",
  "similar 3.2.1",
