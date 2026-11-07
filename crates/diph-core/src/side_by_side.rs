@@ -5,6 +5,8 @@ use std::ops::Range;
 use similar::utils::TextDiffRemapper;
 use similar::{ChangeTag, DiffTag, TextDiff};
 
+use crate::Buffer;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RowKind {
     Equal,
@@ -29,31 +31,28 @@ pub struct Row {
 /// One side's line in a row.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Line {
-    /// Index of the line in its text, counting from zero.
+    /// Index of the line in its side's buffer.
     pub index: usize,
-    /// The line, without its line ending.
-    pub text: String,
     /// For [`RowKind::Changed`] rows, byte ranges of the words that are not in
     /// the line opposite. Empty for other kinds.
     pub changed_words: Vec<Range<usize>>,
 }
 
-/// The rows of a side-by-side view. Each side's lines appear in order, so
-/// walking the rows visits every line of each text once.
+/// The rows of a side-by-side view of two buffers.
 pub struct SideBySide {
+    /// The left and right buffer, whose lines the rows name by index.
+    buffers: [Buffer; 2],
     pub rows: Vec<Row>,
     /// Indices into `rows` where each run of differing rows starts.
     pub changes: Vec<usize>,
-    pub left_line_count: usize,
-    pub right_line_count: usize,
 }
 
 impl SideBySide {
-    /// Line endings are not compared, so CRLF against LF, or a missing
-    /// newline at the end of the file, does not mark lines as changed.
-    pub fn new(left_text: &str, right_text: &str) -> Self {
-        let left_lines = split_lines(left_text);
-        let right_lines = split_lines(right_text);
+    /// The diff of the left and right `buffers`.
+    pub fn new(buffers: [Buffer; 2]) -> Self {
+        let [left, right] = &buffers;
+        let left_lines: Vec<_> = left.lines().iter().map(String::as_str).collect();
+        let right_lines: Vec<_> = right.lines().iter().map(String::as_str).collect();
         let diff = TextDiff::from_slices(&left_lines, &right_lines);
 
         let mut rows = Vec::new();
@@ -81,27 +80,27 @@ impl SideBySide {
                 };
                 rows.push(Row {
                     kind,
-                    left: left.map(|l| line(&left_lines, l, left_words)),
-                    right: right.map(|r| line(&right_lines, r, right_words)),
+                    left: left.map(|index| Line {
+                        index,
+                        changed_words: left_words,
+                    }),
+                    right: right.map(|index| Line {
+                        index,
+                        changed_words: right_words,
+                    }),
                 });
             }
         }
 
         Self {
+            buffers,
             rows,
             changes,
-            left_line_count: left_lines.len(),
-            right_line_count: right_lines.len(),
         }
     }
-}
 
-/// The `index`th of `lines`, with its `changed_words`.
-fn line(lines: &[&str], index: usize, changed_words: Vec<Range<usize>>) -> Line {
-    Line {
-        index,
-        text: lines[index].to_owned(),
-        changed_words,
+    pub fn buffers(&self) -> &[Buffer; 2] {
+        &self.buffers
     }
 }
 
@@ -131,21 +130,17 @@ fn ranges_in(line: &str, slices: &[(ChangeTag, &str)], tag: ChangeTag) -> Vec<Ra
         .collect()
 }
 
-/// Splits into lines without their line endings.
-fn split_lines(text: &str) -> Vec<&str> {
-    text.split_inclusive('\n')
-        .map(|l| l.trim_end_matches(['\n', '\r']))
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use insta::assert_snapshot;
 
-    /// Draws the rows as text: a kind marker, then each side's 1-based line
-    /// number and text, with changed words in brackets.
-    fn render(diff: &SideBySide) -> String {
+    /// Draws the rows of the diff of `left` and `right` as text: a kind
+    /// marker, then each side's 1-based line number and text, with changed
+    /// words in brackets.
+    fn render(left: &str, right: &str) -> String {
+        let diff = SideBySide::new([Buffer::new(left), Buffer::new(right)]);
+        let [left, right] = diff.buffers();
         let mut out = String::new();
         for row in &diff.rows {
             let marker = match row.kind {
@@ -154,22 +149,23 @@ mod tests {
                 RowKind::RightOnly => '>',
                 RowKind::Changed => '~',
             };
-            let left = render_side(row.left.as_ref());
-            let right = render_side(row.right.as_ref());
-            out += format!("{marker} {left:<26}| {right}").trim_end();
+            let left_side = render_side(left, row.left.as_ref());
+            let right_side = render_side(right, row.right.as_ref());
+            out += format!("{marker} {left_side:<26}| {right_side}").trim_end();
             out += "\n";
         }
         out += &format!("changes at {:?}", diff.changes);
         out
     }
 
-    /// One side of a rendered row: the 1-based line number and text, with
-    /// the changed words in brackets. Empty if the side has no line.
-    fn render_side(line: Option<&Line>) -> String {
+    /// One side of a rendered row: the 1-based line number and the text
+    /// from `buffer`, with the changed words in brackets. Empty if the side
+    /// has no line.
+    fn render_side(buffer: &Buffer, line: Option<&Line>) -> String {
         let Some(line) = line else {
             return String::new();
         };
-        let mut text = line.text.clone();
+        let mut text = buffer.lines()[line.index].clone();
         for r in line.changed_words.iter().rev() {
             text.insert(r.end, ']');
             text.insert(r.start, '[');
@@ -181,7 +177,7 @@ mod tests {
     fn pairs_replaced_lines_and_leaves_the_rest_unpaired() {
         let left = "keep\nlet x = 1;\nlet y = 2;\ngone\ntail\n";
         let right = "fresh\nkeep\nlet x = 10;\ntail\nextra\n";
-        assert_snapshot!(render(&SideBySide::new(left, right)), @r"
+        assert_snapshot!(render(left, right), @r"
         >                           | 1 fresh
           1 keep                    | 2 keep
         ~ 2 let x = [1];            | 3 let x = [10];
@@ -197,7 +193,7 @@ mod tests {
     fn marks_changed_words_in_replaced_lines() {
         let left = "let total = a + b;\nfoo(one, two)\nsame\n";
         let right = "let sum = a + b + c;\nfoo(two)\nsame\n";
-        assert_snapshot!(render(&SideBySide::new(left, right)), @r"
+        assert_snapshot!(render(left, right), @r"
         ~ 1 let [total] = a + b;    | 1 let [sum] = a + b[ + c];
         ~ 2 foo([one, ]two)         | 2 foo(two)
           3 same                    | 3 same
@@ -209,7 +205,7 @@ mod tests {
     fn keeps_dotted_names_as_one_word() {
         let left = "counts.entry(word.to_string())\n";
         let right = "counts.entry(word.to_lowercase())\n";
-        assert_snapshot!(render(&SideBySide::new(left, right)), @r"
+        assert_snapshot!(render(left, right), @r"
         ~ 1 counts.entry([word.to_string]())| 1 counts.entry([word.to_lowercase]())
         changes at [0]
         ");
@@ -217,49 +213,21 @@ mod tests {
 
     #[test]
     fn marks_multibyte_words_on_char_boundaries() {
-        let diff = SideBySide::new("café ok\n", "naïve ok\n");
-        assert_snapshot!(render(&diff), @r"
+        assert_snapshot!(render("café ok\n", "naïve ok\n"), @r"
         ~ 1 [café] ok               | 1 [naïve] ok
         changes at [0]
         ");
     }
 
     #[test]
-    fn keeps_tabs_and_strips_crlf() {
-        let left = "\tindented\r\nsame\r\n";
-        let right = "\tindented!\r\nsame\r\n";
-        let diff = SideBySide::new(left, right);
-        let left: Vec<_> = diff.rows.iter().filter_map(|r| r.left.as_ref()).collect();
-        let right: Vec<_> = diff.rows.iter().filter_map(|r| r.right.as_ref()).collect();
-        assert_eq!(
-            left.iter().map(|l| &l.text).collect::<Vec<_>>(),
-            ["\tindented", "same"]
-        );
-        assert_eq!(
-            right.iter().map(|l| &l.text).collect::<Vec<_>>(),
-            ["\tindented!", "same"]
-        );
-    }
-
-    #[test]
     fn ignores_line_ending_differences() {
-        let diff = SideBySide::new("a\r\nb\r\nc", "a\nb\nc\n");
+        let diff = SideBySide::new([Buffer::new("a\r\nb\r\nc"), Buffer::new("a\nb\nc\n")]);
         assert!(diff.rows.iter().all(|r| r.kind == RowKind::Equal));
-    }
-
-    #[yare::parameterized(
-        counts_each_sides_lines = { "a\nb\nc\n", "a\n", [3, 1] },
-        empty_text_has_no_lines = { "", "a\n", [0, 1] },
-        counts_a_last_line_without_a_newline = { "a\nb", "a\nb\n", [2, 2] },
-    )]
-    fn line_counts(left: &str, right: &str, expected: [usize; 2]) {
-        let diff = SideBySide::new(left, right);
-        assert_eq!([diff.left_line_count, diff.right_line_count], expected);
     }
 
     #[test]
     fn empty_left_side_is_all_right_only() {
-        assert_snapshot!(render(&SideBySide::new("", "a\nb")), @r"
+        assert_snapshot!(render("", "a\nb"), @r"
         >                           | 1 a
         >                           | 2 b
         changes at [0]

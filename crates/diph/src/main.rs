@@ -8,7 +8,7 @@ use std::time::Instant;
 
 use anyhow::Context as _;
 use clap::{CommandFactory as _, Parser, error::ErrorKind};
-use diph_core::SideBySide;
+use diph_core::{Buffer, SideBySide};
 use eframe::egui;
 
 use text_view::TextView;
@@ -137,8 +137,8 @@ fn main() -> anyhow::Result<()> {
     }
 
     // Non-UTF-8 text shows U+FFFD in place of the bytes it can't decode.
-    let text = |bytes| String::from_utf8_lossy(bytes).into_owned();
-    let diff = SideBySide::new(&text(&left), &text(&right));
+    let buffer = |bytes| Buffer::new(&String::from_utf8_lossy(bytes));
+    let diff = SideBySide::new([buffer(&left), buffer(&right)]);
     let (left_label, right_label) = (
         shown(&args.left, args.label(0)),
         shown(&args.right, args.label(1)),

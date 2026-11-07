@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant};
 
-use diph_core::{Highlighter, Line, Row, RowKind, SideBySide, Span};
+use diph_core::{Buffer, Highlighter, Line, Row, RowKind, SideBySide, Span};
 use eframe::egui::{
     self, Align2, Color32, CursorIcon, FontId, Galley, Key, KeyboardShortcut, Modifiers, Painter,
     Pos2, Rect, ScrollArea, Sense, Stroke, TextFormat, TextStyle, UiBuilder, epaint::text::Glyph,
@@ -163,11 +163,7 @@ impl TextView {
     pub fn highlight_in_background(&mut self, paths: [PathBuf; 2], ctx: egui::Context) {
         let (tx, rx) = channel();
         self.colors_rx = Some(rx);
-        let rows = &self.diff.rows;
-        let sides = [
-            side_texts(rows.iter().filter_map(|r| r.left.as_ref())),
-            side_texts(rows.iter().filter_map(|r| r.right.as_ref())),
-        ];
+        let sides = self.diff.buffers().each_ref().map(|b| b.lines().to_vec());
         std::thread::spawn(move || highlight_sides(&paths, &sides, &tx, &ctx));
     }
 
@@ -285,7 +281,13 @@ impl TextView {
         let font = TextStyle::Monospace.resolve(ui.style());
         let char_width = ui.fonts_mut(|f| f.glyph_width(&font, '0'));
         let rows = &self.diff.rows;
-        let line_count = self.diff.left_line_count.max(self.diff.right_line_count);
+        let line_count = self
+            .diff
+            .buffers()
+            .iter()
+            .map(|b| b.lines().len())
+            .max()
+            .unwrap_or(0);
         let digits = line_count.max(1).ilog10() as f32 + 1.0;
         let layout = RowLayout {
             row_height: ui.fonts_mut(|f| f.row_height(&font)).ceil(),
@@ -310,7 +312,9 @@ impl TextView {
             // `last` paints every row, keeping the click if one was clicked.
             rows[range]
                 .iter()
-                .filter_map(|row| layout.paint_row(ui, &self.colors, row, cursor))
+                .filter_map(|row| {
+                    layout.paint_row(ui, self.diff.buffers(), &self.colors, row, cursor)
+                })
                 .last()
         });
         if let (Some(cursor), Some(clicked)) = (&mut self.cursor, output.inner) {
@@ -322,11 +326,6 @@ impl TextView {
         self.rows_in_view = (bottom.floor() as usize).saturating_sub(self.top_row);
         top..bottom
     }
-}
-
-/// The texts of one side's lines, in order.
-fn side_texts<'a>(lines: impl Iterator<Item = &'a Line>) -> Vec<String> {
-    lines.map(|l| l.text.clone()).collect()
 }
 
 /// Highlights both sides at once, sending each side's colors over `tx` in
@@ -440,12 +439,13 @@ struct RowLayout {
 }
 
 impl RowLayout {
-    /// Paints `row` across both halves, with a divider between them, and
-    /// `cursor` if it is on one of the row's lines. Returns the character a
-    /// click on a line's half was on.
+    /// Paints `row` across both halves, with each side's text from its
+    /// buffer, a divider between them, and `cursor` if it is on one of the
+    /// row's lines. Returns the character a click on a line's half was on.
     fn paint_row(
         &self,
         ui: &mut egui::Ui,
+        buffers: &[Buffer; 2],
         colors: &[SideColors; 2],
         row: &Row,
         cursor: Option<Position>,
@@ -468,8 +468,9 @@ impl RowLayout {
                 painter.rect_filled(half, 0.0, FILLER_BG);
                 continue;
             };
+            let text = &buffers[side].lines()[line.index];
             let spans = colors[side].line(line);
-            let (pos, galley) = self.paint_half(ui, painter, half, line, spans, background);
+            let (pos, galley) = self.paint_half(ui, half, line, text, spans, background);
             let glyphs = galley.rows.first().map_or(&[][..], |r| &r.glyphs);
             if let Some(c) = cursor.filter(|c| c.side == side && c.line == line.index) {
                 self.paint_cursor(painter, half, pos, glyphs.get(c.column));
@@ -499,18 +500,19 @@ impl RowLayout {
     }
 
     /// Paints one half of a row that has a line: the background, the line
-    /// number, and the line text in the colors of its spans, clipped to the
-    /// half, with its changed words highlighted. Returns where the text
+    /// number, and the line's `text` in the colors of its spans, clipped to
+    /// the half, with its changed words highlighted. Returns where the text
     /// starts, and its layout.
     fn paint_half(
         &self,
         ui: &egui::Ui,
-        painter: &Painter,
         half: Rect,
         line: &Line,
+        text: &str,
         spans: &[Span],
         background: Option<Color32>,
     ) -> (Pos2, Arc<Galley>) {
+        let painter = ui.painter();
         let mid_y = half.center().y;
         let gutter_right = half.left() + self.gutter_width;
         if let Some(background) = background {
@@ -527,7 +529,7 @@ impl RowLayout {
         );
 
         let text_rect = Rect::from_min_max(pos2(gutter_right, half.top()), half.max);
-        let galley = ui.fonts_mut(|f| f.layout_job(self.line_job(line, spans)));
+        let galley = ui.fonts_mut(|f| f.layout_job(self.line_job(line, text, spans)));
         let pos = pos2(gutter_right, mid_y - galley.size().y / 2.0);
         painter
             .with_clip_rect(text_rect)
@@ -535,9 +537,9 @@ impl RowLayout {
         (pos, galley)
     }
 
-    /// Lays out `line` in the colors of `spans`, with its changed words on
-    /// [`CHANGED_WORD_BG`].
-    fn line_job(&self, line: &Line, spans: &[Span]) -> LayoutJob {
+    /// Lays out `line`'s `text` in the colors of `spans`, with its changed
+    /// words on [`CHANGED_WORD_BG`].
+    fn line_job(&self, line: &Line, text: &str, spans: &[Span]) -> LayoutJob {
         let color_starts = spans.iter().map(|span| {
             let [r, g, b] = span.rgb;
             (span.range.start, Color32::from_rgb(r, g, b))
@@ -549,7 +551,7 @@ impl RowLayout {
         // Each event starts a new color, a new background, or both.
         for event in color_starts.merge_join_by(background_starts, |a, b| a.0.cmp(&b.0)) {
             let end = event.as_ref().reduce(|a, _| a).0;
-            self.append_piece(&mut job, &line.text[start..end], color, background);
+            self.append_piece(&mut job, &text[start..end], color, background);
             start = end;
             match event {
                 Left((_, c)) => color = c,
@@ -557,7 +559,7 @@ impl RowLayout {
                 Both((_, c), (_, b)) => (color, background) = (c, b),
             }
         }
-        self.append_piece(&mut job, &line.text[start..], color, background);
+        self.append_piece(&mut job, &text[start..], color, background);
         job
     }
 
@@ -609,7 +611,7 @@ mod tests {
             .replace("line 15\n", "line fifteen\n")
             .replace("line 25\n", "line twenty-five\n");
         TextView::new(
-            SideBySide::new(&left, &right),
+            SideBySide::new([Buffer::new(&left), Buffer::new(&right)]),
             "left".into(),
             "right".into(),
             Instant::now(),
@@ -642,7 +644,7 @@ mod tests {
     /// Shift, a key name such as `Down`, or either with `C-` for Ctrl.
     fn typed_in_unchanged_file(keys: &str) -> Harness<'static, TextView> {
         let text: String = (0..200).map(|i| format!("line {i}\n")).collect();
-        let diff = SideBySide::new(&text, &text);
+        let diff = SideBySide::new([Buffer::new(&text), Buffer::new(&text)]);
         let view = TextView::new(diff, "left".into(), "right".into(), Instant::now());
         let mut harness = Harness::new_ui_state(|ui, view| view.show(ui), view);
         harness.run();
@@ -748,7 +750,7 @@ mod tests {
         let left: Vec<_> = (0..lines).map(|i| format!("line {i}\n")).collect();
         let mut right = left.clone();
         right[changed.clone()].fill("changed\n".to_owned());
-        let diff = SideBySide::new(&left.concat(), &right.concat());
+        let diff = SideBySide::new([Buffer::new(&left.concat()), Buffer::new(&right.concat())]);
         let map = Rect::from_min_size(pos2(0.0, 0.0), vec2(10.0, 100.0));
 
         let y = map_y(map, diff.rows.len(), rows_in_view);
@@ -764,7 +766,7 @@ mod tests {
         added_lines_mark_the_right_column = { "a\nd\n", "a\nb\nc\nd\n", 5.0..=10.0 },
     )]
     fn one_sided_marks(left: &str, right: &str, x_range: std::ops::RangeInclusive<f32>) {
-        let diff = SideBySide::new(left, right);
+        let diff = SideBySide::new([Buffer::new(left), Buffer::new(right)]);
         let map = Rect::from_min_size(pos2(0.0, 0.0), vec2(10.0, 100.0));
 
         let marks = super::change_marks(&diff.rows, map, map_y(map, diff.rows.len(), 4.0));

@@ -123,7 +123,7 @@ fn side_lines(diff: &SideBySide, side: usize) -> Vec<LinePlace> {
         .filter_map(|(row, r)| [&r.left, &r.right][side].as_ref().map(|l| (row, l)))
         .map(|(row, l)| LinePlace {
             row,
-            chars: l.text.chars().count(),
+            chars: diff.buffers()[side].lines()[l.index].chars().count(),
         })
         .collect()
 }
@@ -131,10 +131,16 @@ fn side_lines(diff: &SideBySide, side: usize) -> Vec<LinePlace> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use diph_core::Buffer;
+
+    /// A new cursor on the diff of the texts `left` and `right`.
+    fn cursor_on(left: &str, right: &str) -> Option<Cursor> {
+        Cursor::new(&SideBySide::new([Buffer::new(left), Buffer::new(right)]))
+    }
 
     /// A cursor on a diff of `left` and `right`, moved to `start`.
     fn cursor_at(left: &str, right: &str, start: Position) -> Cursor {
-        let mut cursor = Cursor::new(&SideBySide::new(left, right)).unwrap();
+        let mut cursor = cursor_on(left, right).unwrap();
         cursor.set(start);
         cursor
     }
@@ -144,7 +150,7 @@ mod tests {
         on_the_left_side_when_the_right_has_no_lines = { "a\n", "", 0 },
     )]
     fn starts_at_the_first_line(left: &str, right: &str, side: usize) {
-        let cursor = Cursor::new(&SideBySide::new(left, right)).unwrap();
+        let cursor = cursor_on(left, right).unwrap();
         assert_eq!(
             cursor.position(),
             Position {
@@ -157,7 +163,7 @@ mod tests {
 
     #[test]
     fn there_is_none_without_lines() {
-        assert!(Cursor::new(&SideBySide::new("", "")).is_none());
+        assert!(cursor_on("", "").is_none());
     }
 
     #[test]
