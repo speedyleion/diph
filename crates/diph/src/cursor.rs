@@ -1,6 +1,6 @@
 //! The cursor: a character on one side of a diff.
 
-use diph_core::SideBySide;
+use diph_core::{Buffer, SideBySide};
 
 /// A character on one side of a diff.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -34,11 +34,11 @@ pub struct Cursor {
 }
 
 impl Cursor {
-    /// A cursor at the start of the right side's first line, or of the left
-    /// side's when the right side has none. `None` when neither side has
-    /// lines.
-    pub fn new(diff: &SideBySide) -> Option<Self> {
-        let lines = [side_lines(diff, 0), side_lines(diff, 1)];
+    /// A cursor on `diff` of the left and right `buffers`, at the start of
+    /// the right side's first line, or of the left side's when the right
+    /// side has none. `None` when neither side has lines.
+    pub fn new(diff: &SideBySide, buffers: &[Buffer; 2]) -> Option<Self> {
+        let lines = [side_lines(diff, buffers, 0), side_lines(diff, buffers, 1)];
         let side = [1, 0].into_iter().find(|&s| !lines[s].is_empty())?;
         Some(Self {
             lines,
@@ -116,14 +116,14 @@ impl Cursor {
 }
 
 /// Where each of `side`'s lines sits in `diff`, in order.
-fn side_lines(diff: &SideBySide, side: usize) -> Vec<LinePlace> {
+fn side_lines(diff: &SideBySide, buffers: &[Buffer; 2], side: usize) -> Vec<LinePlace> {
     diff.rows
         .iter()
         .enumerate()
         .filter_map(|(row, r)| [&r.left, &r.right][side].as_ref().map(|l| (row, l)))
         .map(|(row, l)| LinePlace {
             row,
-            chars: l.text.chars().count(),
+            chars: buffers[side].lines()[l.index].chars().count(),
         })
         .collect()
 }
@@ -132,9 +132,15 @@ fn side_lines(diff: &SideBySide, side: usize) -> Vec<LinePlace> {
 mod tests {
     use super::*;
 
+    /// A new cursor on the diff of the texts `left` and `right`.
+    fn cursor_on(left: &str, right: &str) -> Option<Cursor> {
+        let buffers = [Buffer::new(left), Buffer::new(right)];
+        Cursor::new(&SideBySide::new(&buffers[0], &buffers[1]), &buffers)
+    }
+
     /// A cursor on a diff of `left` and `right`, moved to `start`.
     fn cursor_at(left: &str, right: &str, start: Position) -> Cursor {
-        let mut cursor = Cursor::new(&SideBySide::new(left, right)).unwrap();
+        let mut cursor = cursor_on(left, right).unwrap();
         cursor.set(start);
         cursor
     }
@@ -144,7 +150,7 @@ mod tests {
         on_the_left_side_when_the_right_has_no_lines = { "a\n", "", 0 },
     )]
     fn starts_at_the_first_line(left: &str, right: &str, side: usize) {
-        let cursor = Cursor::new(&SideBySide::new(left, right)).unwrap();
+        let cursor = cursor_on(left, right).unwrap();
         assert_eq!(
             cursor.position(),
             Position {
@@ -157,7 +163,7 @@ mod tests {
 
     #[test]
     fn there_is_none_without_lines() {
-        assert!(Cursor::new(&SideBySide::new("", "")).is_none());
+        assert!(cursor_on("", "").is_none());
     }
 
     #[test]
