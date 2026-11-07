@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant};
 
-use diph_core::{Buffer, Highlighter, Line, Row, RowKind, SideBySide, Span};
+use diph_core::{Buffer, Highlighter, Line, Position, Row, RowKind, SideBySide, Span};
 use eframe::egui::{
     self, Align2, Color32, CursorIcon, FontId, Galley, Key, KeyboardShortcut, Modifiers, Painter,
     Pos2, Rect, ScrollArea, Sense, Stroke, TextFormat, TextStyle, UiBuilder, epaint::text::Glyph,
@@ -17,7 +17,7 @@ use itertools::{
     Itertools as _,
 };
 
-use crate::cursor::{Cursor, Position};
+use crate::cursor::Cursor;
 use crate::keymap::Keymap;
 
 /// Background of a line with nothing opposite it.
