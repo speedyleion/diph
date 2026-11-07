@@ -63,3 +63,5 @@ and `--help` text: describe what the code does now.
   the same test.
 - Cover several inputs to one behavior with a `yare::parameterized`
   test, naming each case for what it shows.
+- Keep the tests of one behavior together. Add tests for a new behavior
+  after the existing tests, not between tests of another behavior.

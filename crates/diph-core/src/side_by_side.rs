@@ -253,6 +253,15 @@ mod tests {
         assert!(diff.rows.iter().all(|r| r.kind == RowKind::Equal));
     }
 
+    #[test]
+    fn empty_left_side_is_all_right_only() {
+        assert_snapshot!(render("", "a\nb"), @r"
+        >                           | 1 a
+        >                           | 2 b
+        changes at [0]
+        ");
+    }
+
     /// The diff of four lines on the left against the first and last of
     /// them on the right, which has no line in rows 1 and 2.
     fn two_lines_deleted() -> SideBySide {
@@ -280,14 +289,5 @@ mod tests {
     fn a_side_without_lines_has_no_line_at_any_row() {
         let diff = SideBySide::new([Buffer::new(""), Buffer::new("a\n")]);
         assert_eq!(diff.line_at(0, 0), None);
-    }
-
-    #[test]
-    fn empty_left_side_is_all_right_only() {
-        assert_snapshot!(render("", "a\nb"), @r"
-        >                           | 1 a
-        >                           | 2 b
-        changes at [0]
-        ");
     }
 }
