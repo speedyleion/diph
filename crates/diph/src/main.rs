@@ -191,8 +191,10 @@ mod tests {
     }
 
     #[yare::parameterized(
-        shows_a_shared_path_once = { ["src/a.rs", "src/a.rs"], "src/a.rs" },
-        shows_both_paths_when_they_differ = { ["old.rs", "new.py"], "old.rs ↔ new.py" },
+        shows_a_shared_file_once = { ["src/a.rs", "src/a.rs"], "a.rs" },
+        shows_a_shared_file_different_path_once = { ["foo/a.rs", "bar/a.rs"], "a.rs" },
+        shows_both_files_when_they_differ = { ["old.rs", "new.py"], "old.rs ↔ new.py" },
+        shows_both_files_when_paths_differ = { ["foo/old.rs", "bar/new.py"], "old.rs ↔ new.py" },
     )]
     fn diff_name(paths: [&str; 2], expected: &str) {
         assert_eq!(super::diff_name(&paths.map(PathBuf::from)), expected);
