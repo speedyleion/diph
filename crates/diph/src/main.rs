@@ -109,8 +109,14 @@ fn side_path(path: &Path, label: Option<&Path>, other: &Path) -> PathBuf {
 fn diff_name([left, right]: &[PathBuf; 2]) -> String {
     let left = left.as_path();
     let right = right.as_path();
-    let left_name = left.file_name().unwrap_or_else(|| left.as_os_str()).to_str();
-    let right_name = right.file_name().unwrap_or_else(|| right.as_os_str()).to_str();
+    let left_name = left
+        .file_name()
+        .unwrap_or_else(|| left.as_os_str())
+        .to_str();
+    let right_name = right
+        .file_name()
+        .unwrap_or_else(|| right.as_os_str())
+        .to_str();
 
     match (left_name, right_name) {
         (Some(left), Some(right)) if left != right => format!("{left} ↔ {right}"),
@@ -144,17 +150,15 @@ fn main() -> anyhow::Result<()> {
     let mut view = TextView::new(diff, left_label, right_label, started);
 
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1400.0, 900.0]),
+        viewport: egui::ViewportBuilder::default().with_inner_size([1400.0, 900.0]),
         ..Default::default()
     };
     eframe::run_native(
         "diph",
         options,
         Box::new(move |cc| {
-            cc.egui_ctx.send_viewport_cmd(egui::ViewportCommand::Title(
-                format!("{name} — diph"),
-            ));
+            cc.egui_ctx
+                .send_viewport_cmd(egui::ViewportCommand::Title(format!("{name} — diph")));
             // The diff colors are picked for a dark background.
             cc.egui_ctx.set_theme(egui::Theme::Dark);
             view.highlight_in_background(paths, cc.egui_ctx.clone());
