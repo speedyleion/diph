@@ -37,8 +37,6 @@ const IN_VIEW_COVER: Color32 = Color32::from_rgba_premultiplied(24, 24, 24, 24);
 
 /// Width of the change map beside the rows.
 const MAP_WIDTH: f32 = 16.0;
-/// Gap between the change map's left and right columns.
-const MAP_GAP: f32 = 2.0;
 /// Least height of a change map mark, so one row of a long diff still shows.
 const MIN_MARK_HEIGHT: f32 = 3.0;
 
@@ -333,8 +331,8 @@ fn map_y(map: Rect, rows: usize, rows_in_view: f32) -> impl Fn(f32) -> f32 {
 /// of `map`.
 fn change_marks(rows: &[Row], map: Rect, y: impl Fn(f32) -> f32) -> Vec<(Rect, Color32)> {
     let center = map.center().x;
-    let left = map.with_max_x(center - MAP_GAP / 2.0);
-    let right = map.with_min_x(center + MAP_GAP / 2.0);
+    let left = map.with_max_x(center);
+    let right = map.with_min_x(center);
     let mut marks = column_marks(rows, left, &y, RowKind::LeftOnly);
     marks.extend(column_marks(rows, right, &y, RowKind::RightOnly));
     marks
