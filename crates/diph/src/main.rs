@@ -111,11 +111,11 @@ fn diff_name([left, right]: &[PathBuf; 2]) -> String {
     let right = right.as_path();
     let left_name = left
         .file_name()
-        .unwrap_or_else(|| left.as_os_str())
+        .unwrap_or(left.as_os_str())
         .to_str();
     let right_name = right
         .file_name()
-        .unwrap_or_else(|| right.as_os_str())
+        .unwrap_or(right.as_os_str())
         .to_str();
 
     match (left_name, right_name) {
