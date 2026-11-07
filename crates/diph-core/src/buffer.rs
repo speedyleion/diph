@@ -33,9 +33,9 @@ impl Buffer {
     }
 
     /// Inserts `text` at `at`, splitting the line at each newline in
-    /// `text`. `at` stops at the last line and at the end of its line, and
-    /// a buffer without lines gets one. Returns the position just past the
-    /// inserted text.
+    /// `text`. `at` stops at the end of its line, a line past the last stops
+    /// at the end of the buffer, and a buffer without lines gets one.
+    /// Returns the position just past the inserted text.
     pub fn insert(&mut self, at: Position, text: &str) -> Position {
         if self.lines.is_empty() {
             self.lines.push(String::new());
@@ -53,8 +53,9 @@ impl Buffer {
     }
 
     /// Removes the text from `range.start` up to `range.end`, joining their
-    /// lines. Each end stops at the last line and at the end of its line.
-    /// Removes nothing when `range.end` is not after `range.start`.
+    /// lines. Each end stops at the end of its line, and a line past the
+    /// last stops at the end of the buffer. Removes nothing when `range.end`
+    /// is not after `range.start`.
     pub fn delete(&mut self, range: Range<Position>) {
         if self.lines.is_empty() {
             return;
@@ -70,14 +71,17 @@ impl Buffer {
         self.lines.drain(start_line + 1..=end_line);
     }
 
-    /// The line of `position`, stopping at the last line, and the byte
-    /// index in it of `position`'s column, stopping at the line's end. The
-    /// buffer must have lines.
+    /// The line of `position` and the byte index in it of `position`'s
+    /// column, stopping at the line's end. A line past the last stops at the
+    /// end of the buffer. The buffer must have lines.
     fn byte_position(&self, position: Position) -> (usize, usize) {
-        let line = position.line.min(self.lines.len() - 1);
-        let text = &self.lines[line];
+        let last = self.lines.len() - 1;
+        if position.line > last {
+            return (last, self.lines[last].len());
+        }
+        let text = &self.lines[position.line];
         let byte = text.char_indices().nth(position.column);
-        (line, byte.map_or(text.len(), |(i, _)| i))
+        (position.line, byte.map_or(text.len(), |(i, _)| i))
     }
 }
 
@@ -100,7 +104,7 @@ mod tests {
         in_the_middle_of_a_line = { "hello\nworld\n", Position { line: 0, column: 2 }, "XY", &["heXYllo", "world"] },
         at_the_end_of_a_line = { "hello\nworld\n", Position { line: 0, column: 5 }, "!", &["hello!", "world"] },
         past_the_end_of_a_line_at_its_end = { "hello\nworld\n", Position { line: 0, column: 9 }, "!", &["hello!", "world"] },
-        past_the_last_line_on_the_last_line = { "hello\nworld\n", Position { line: 9, column: 0 }, ">", &["hello", ">world"] },
+        past_the_last_line_at_the_end_of_the_buffer = { "hello\nworld\n", Position { line: 9, column: 0 }, ">", &["hello", "world>"] },
         a_newline_splits_the_line = { "hello\nworld\n", Position { line: 0, column: 2 }, "\n", &["he", "llo", "world"] },
         several_lines_between_two = { "hello\nworld\n", Position { line: 1, column: 0 }, "a\nb\n", &["hello", "a", "b", "world"] },
         at_a_column_counted_in_characters = { "héllo\n", Position { line: 0, column: 2 }, "-", &["hé-llo"] },
@@ -127,6 +131,7 @@ mod tests {
         across_lines_joining_them = { "hello\nworld\n", Position { line: 0, column: 3 }..Position { line: 1, column: 2 }, &["helrld"] },
         a_line_break_joining_its_lines = { "hello\nworld\n", Position { line: 0, column: 5 }..Position { line: 1, column: 0 }, &["helloworld"] },
         up_to_the_end_of_the_line_past_it = { "hello\nworld\n", Position { line: 0, column: 3 }..Position { line: 0, column: 9 }, &["hel", "world"] },
+        up_to_the_end_of_the_buffer_past_its_last_line = { "hello\nworld\n", Position { line: 0, column: 3 }..Position { line: 9, column: 0 }, &["hel"] },
         nothing_when_the_end_is_before_the_start = { "hello\nworld\n", Position { line: 0, column: 3 }..Position { line: 0, column: 1 }, &["hello", "world"] },
         columns_counted_in_characters = { "héllo\n", Position { line: 0, column: 1 }..Position { line: 0, column: 2 }, &["hllo"] },
         nothing_from_a_buffer_without_lines = { "", Position { line: 0, column: 0 }..Position { line: 0, column: 1 }, &[] },
