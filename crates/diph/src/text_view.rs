@@ -592,14 +592,14 @@ mod tests {
         let y = map_y(map, diff.rows.len(), rows_in_view);
         let marks = super::change_marks(&diff.rows, map, y);
 
-        let left = Rect::from_x_y_ranges(0.0..=4.0, y_range.clone());
-        let right = Rect::from_x_y_ranges(6.0..=10.0, y_range);
+        let left = Rect::from_x_y_ranges(0.0..=5.0, y_range.clone());
+        let right = Rect::from_x_y_ranges(5.0..=10.0, y_range);
         assert_eq!(marks, vec![(left, CHANGED_MARK), (right, CHANGED_MARK)]);
     }
 
     #[yare::parameterized(
-        deleted_lines_mark_the_left_column = { "a\nb\nc\nd\n", "a\nd\n", 0.0..=4.0 },
-        added_lines_mark_the_right_column = { "a\nd\n", "a\nb\nc\nd\n", 6.0..=10.0 },
+        deleted_lines_mark_the_left_column = { "a\nb\nc\nd\n", "a\nd\n", 0.0..=5.0 },
+        added_lines_mark_the_right_column = { "a\nd\n", "a\nb\nc\nd\n", 5.0..=10.0 },
     )]
     fn one_sided_marks(left: &str, right: &str, x_range: std::ops::RangeInclusive<f32>) {
         let diff = SideBySide::new(left, right);
