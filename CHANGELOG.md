@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - j and k move the cursor instead of scrolling the view
+- ZZ closes the window instead of Escape
 
 ## [0.1.2] - 2026-11-06
 
