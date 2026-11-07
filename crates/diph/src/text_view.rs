@@ -72,12 +72,13 @@ enum Action {
     LastLine,
     LeftSide,
     RightSide,
+    Close,
 }
 
 /// p or Shift+F7 and n or F7 step through changes. h, j, k, and l or the
 /// arrow keys move the cursor a character or a line, gg and G move it to
 /// the first and last line, and Ctrl+W h and Ctrl+W l move it to the left
-/// and right side.
+/// and right side. ZZ closes the window.
 fn keymap() -> Keymap<Action> {
     let key = |key| KeyboardShortcut::new(Modifiers::NONE, key);
     let shift = |key| KeyboardShortcut::new(Modifiers::SHIFT, key);
@@ -101,6 +102,7 @@ fn keymap() -> Keymap<Action> {
         (vec![ctrl(Key::W), ctrl(Key::H)], Action::LeftSide),
         (vec![ctrl(Key::W), key(Key::L)], Action::RightSide),
         (vec![ctrl(Key::W), ctrl(Key::L)], Action::RightSide),
+        (vec![shift(Key::Z), shift(Key::Z)], Action::Close),
     ])
 }
 
@@ -182,12 +184,9 @@ impl TextView {
                 self.colors[chunk.side].lines.extend(chunk.lines);
             }
         }
-        if ui.input(|i| i.key_pressed(Key::Escape)) {
-            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
-        }
         let actions = ui.input(|i| self.keymap.actions(i));
         for action in actions {
-            self.perform(action);
+            self.perform(ui.ctx(), action);
         }
 
         egui::Panel::top("text_header").show(ui, |ui| {
@@ -232,7 +231,7 @@ impl TextView {
         painter.rect_filled(cover, 0.0, IN_VIEW_COVER);
     }
 
-    fn perform(&mut self, action: Action) {
+    fn perform(&mut self, ctx: &egui::Context, action: Action) {
         match action {
             Action::PrevChange => self.step_change(-1),
             Action::NextChange => self.step_change(1),
@@ -244,6 +243,7 @@ impl TextView {
             Action::LastLine => self.move_cursor(|c, b| c.go_to_line(b, usize::MAX)),
             Action::LeftSide => self.switch_side(0),
             Action::RightSide => self.switch_side(1),
+            Action::Close => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
         }
     }
 
@@ -826,12 +826,20 @@ mod tests {
     }
 
     #[test]
-    fn escape_closes_the_window() {
+    fn shift_zz_closes_the_window() {
         let mut harness = Harness::new_ui_state(|ui, view| view.show(ui), three_changes());
         harness.run();
-        // Only the key down, so the next frame's output is the one that
+        harness.key_press_modifiers(Modifiers::SHIFT, Key::Z);
+        harness.run();
+        // Only the key down, so the one frame `step` runs is the one that
         // handles it.
-        harness.key_down(Key::Escape);
+        harness.event(egui::Event::Key {
+            key: Key::Z,
+            pressed: true,
+            modifiers: Modifiers::SHIFT,
+            repeat: false,
+            physical_key: None,
+        });
         harness.step();
         let commands = &harness.output().viewport_output[&egui::ViewportId::ROOT].commands;
         assert!(commands.contains(&egui::ViewportCommand::Close));
