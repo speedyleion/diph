@@ -10,30 +10,40 @@ pub struct Cursor {
     line: usize,
     /// The column to show on lines long enough to reach it.
     column: usize,
+    /// Whether the cursor may sit just past the last character of a line.
+    past_end: bool,
 }
 
 impl Cursor {
     /// Where the cursor is in `buffer`, with its column limited to the
-    /// line's last character.
+    /// line's last column.
     pub fn position(&self, buffer: &Buffer) -> Position {
         Position {
             line: self.line,
-            column: self.column.min(last_column(buffer, self.line)),
+            column: self.column.min(self.last_column(buffer)),
         }
     }
 
     /// Moves to `position` in `buffer`, stopping at its last line and the
-    /// last character of the line.
+    /// last column of the line.
     pub fn set(&mut self, buffer: &Buffer, position: Position) {
         self.go_to_line(buffer, position.line);
-        self.column = position.column.min(last_column(buffer, self.line));
+        self.column = position.column.min(self.last_column(buffer));
+    }
+
+    /// Lets the cursor sit just past the last character of a line, or
+    /// stops it at the last character. The cursor drops the column it kept
+    /// for longer lines.
+    pub fn allow_past_end(&mut self, buffer: &Buffer, allow: bool) {
+        self.set(buffer, self.position(buffer));
+        self.past_end = allow;
     }
 
     /// Moves `delta` characters right or left, stopping at either end of
     /// the line.
     pub fn move_column(&mut self, buffer: &Buffer, delta: isize) {
         let column = self.position(buffer).column.saturating_add_signed(delta);
-        self.column = column.min(last_column(buffer, self.line));
+        self.column = column.min(self.last_column(buffer));
     }
 
     /// Moves `delta` lines down or up, stopping at the first and last line.
@@ -45,13 +55,21 @@ impl Cursor {
     pub fn go_to_line(&mut self, buffer: &Buffer, line: usize) {
         self.line = line.min(buffer.lines().len().saturating_sub(1));
     }
-}
 
-/// The column of the last character of `line` in `buffer`, or 0 when the
-/// line is empty or missing.
-fn last_column(buffer: &Buffer, line: usize) -> usize {
-    let chars = buffer.lines().get(line).map_or(0, |l| l.chars().count());
-    chars.saturating_sub(1)
+    /// The last column the cursor can take on its line in `buffer`: just
+    /// past the last character when allowed past the end, else the last
+    /// character, or 0 when the line is empty or missing.
+    fn last_column(&self, buffer: &Buffer) -> usize {
+        let chars = buffer
+            .lines()
+            .get(self.line)
+            .map_or(0, |l| l.chars().count());
+        if self.past_end {
+            chars
+        } else {
+            chars.saturating_sub(1)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -129,5 +147,30 @@ mod tests {
         cursor.move_line(&buffer, 1);
         cursor.move_column(&buffer, -1);
         assert_eq!(cursor.position(&buffer).column, 0);
+    }
+
+    #[test]
+    fn allowed_past_the_end_moves_onto_it() {
+        let (mut cursor, buffer) = cursor_at("hello\n", Position { line: 0, column: 4 });
+        cursor.allow_past_end(&buffer, true);
+        cursor.move_column(&buffer, 1);
+        assert_eq!(cursor.position(&buffer).column, 5);
+    }
+
+    #[test]
+    fn disallowed_past_the_end_moves_back_onto_the_last_character() {
+        let (mut cursor, buffer) = cursor_at("hello\n", Position { line: 0, column: 4 });
+        cursor.allow_past_end(&buffer, true);
+        cursor.move_column(&buffer, 1);
+        cursor.allow_past_end(&buffer, false);
+        assert_eq!(cursor.position(&buffer).column, 4);
+    }
+
+    #[test]
+    fn allowed_past_the_end_stays_at_the_column_shown() {
+        let (mut cursor, buffer) = cursor_at("hello\nab\n", Position { line: 0, column: 4 });
+        cursor.move_line(&buffer, 1);
+        cursor.allow_past_end(&buffer, true);
+        assert_eq!(cursor.position(&buffer).column, 1);
     }
 }

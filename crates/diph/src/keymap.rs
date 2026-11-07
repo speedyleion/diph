@@ -1,6 +1,6 @@
 //! Key sequences, such as vim's `gg`, bound to actions.
 
-use eframe::egui::{Event, InputState, KeyboardShortcut};
+use eframe::egui::{Event, KeyboardShortcut};
 
 /// Actions bound to sequences of key presses, which may span several frames.
 /// A key that neither completes nor continues a sequence cancels it, along
@@ -42,19 +42,8 @@ impl<A: Copy> Keymap<A> {
         }
     }
 
-    /// The actions of the sequences that the keys pressed this frame
-    /// complete, in order.
-    pub fn actions(&mut self, input: &InputState) -> Vec<A> {
-        input
-            .events
-            .iter()
-            .filter_map(pressed_key)
-            .filter_map(|key| self.press(key))
-            .collect()
-    }
-
     /// Adds `key` to the pending sequence, returning the action it completes.
-    fn press(&mut self, key: KeyboardShortcut) -> Option<A> {
+    pub fn press(&mut self, key: KeyboardShortcut) -> Option<A> {
         self.pending.push(key);
         let continued: Vec<_> = self
             .bindings
@@ -73,7 +62,7 @@ impl<A: Copy> Keymap<A> {
 }
 
 /// The key and modifiers of a key press, including repeats from holding it.
-fn pressed_key(event: &Event) -> Option<KeyboardShortcut> {
+pub fn pressed_key(event: &Event) -> Option<KeyboardShortcut> {
     match event {
         Event::Key {
             key,
