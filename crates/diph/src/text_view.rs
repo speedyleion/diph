@@ -6,13 +6,15 @@ use std::time::{Duration, Instant};
 
 use diph_core::{Highlighter, Line, Row, RowKind, SideBySide, Span};
 use eframe::egui::{
-    self, Align2, Color32, FontId, InputState, Key, Painter, Rect, ScrollArea, Sense, Stroke,
-    TextFormat, TextStyle, pos2, text::LayoutJob, vec2,
+    self, Align2, Color32, FontId, Key, KeyboardShortcut, Modifiers, Painter, Rect, ScrollArea,
+    Sense, Stroke, TextFormat, TextStyle, pos2, text::LayoutJob, vec2,
 };
 use itertools::{
     EitherOrBoth::{Both, Left, Right},
     Itertools as _,
 };
+
+use crate::keymap::Keymap;
 
 /// Background of a line with nothing opposite it.
 const ONE_SIDED_BG: Color32 = Color32::from_rgb(0x1b, 0x3d, 0x2a);
@@ -39,14 +41,45 @@ struct ColorsChunk {
     lines: Vec<Vec<Span>>,
 }
 
+/// What a key sequence asks the view to do.
+#[derive(Clone, Copy)]
+enum Action {
+    PrevChange,
+    NextChange,
+    LineDown,
+    LineUp,
+    Top,
+    Bottom,
+}
+
+/// p or Shift+F7 and n or F7 step through changes, j and k scroll a line,
+/// and gg and G scroll to the top and bottom.
+fn keymap() -> Keymap<Action> {
+    let key = |key| KeyboardShortcut::new(Modifiers::NONE, key);
+    let shift = |key| KeyboardShortcut::new(Modifiers::SHIFT, key);
+    Keymap::new([
+        (vec![key(Key::P)], Action::PrevChange),
+        (vec![shift(Key::F7)], Action::PrevChange),
+        (vec![key(Key::N)], Action::NextChange),
+        (vec![key(Key::F7)], Action::NextChange),
+        (vec![key(Key::J)], Action::LineDown),
+        (vec![key(Key::K)], Action::LineUp),
+        (vec![key(Key::G), key(Key::G)], Action::Top),
+        (vec![shift(Key::G)], Action::Bottom),
+    ])
+}
+
 pub struct TextView {
     diff: SideBySide,
     left_label: String,
     right_label: String,
     /// Index into `diff.changes` of the change last jumped to.
     current_change: Option<usize>,
-    /// Row to scroll to on the next frame.
-    scroll_to_row: Option<usize>,
+    /// Row to scroll to the top of the view on the next frame.
+    scroll_to_top_row: Option<usize>,
+    /// Row at the top of the view in the last frame.
+    top_row: usize,
+    keymap: Keymap<Action>,
     /// Syntax colors of the left and right side, filled in from the top as
     /// the background highlighter delivers them.
     colors: [SideColors; 2],
@@ -71,7 +104,9 @@ impl TextView {
             left_label,
             right_label,
             current_change: None,
-            scroll_to_row: None,
+            scroll_to_top_row: None,
+            top_row: 0,
+            keymap: keymap(),
             colors: Default::default(),
             colors_rx: None,
             started,
@@ -106,9 +141,9 @@ impl TextView {
         if ui.input(|i| i.key_pressed(Key::Escape)) {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
         }
-        let step = ui.input(change_step);
-        if step != 0 {
-            self.step_change(step);
+        let actions = ui.input(|i| self.keymap.actions(i));
+        for action in actions {
+            self.perform(action);
         }
 
         egui::Panel::top("text_header").show(ui, |ui| {
@@ -135,6 +170,24 @@ impl TextView {
         egui::CentralPanel::default().show(ui, |ui| self.rows_ui(ui));
     }
 
+    fn perform(&mut self, action: Action) {
+        match action {
+            Action::PrevChange => self.step_change(-1),
+            Action::NextChange => self.step_change(1),
+            Action::LineDown => self.scroll_by(1),
+            Action::LineUp => self.scroll_by(-1),
+            Action::Top => self.scroll_to_top_row = Some(0),
+            // Scrolling stops once the last row is in view.
+            Action::Bottom => self.scroll_to_top_row = Some(self.diff.rows.len()),
+        }
+    }
+
+    /// Scrolls `delta` rows down or up from where the view is headed.
+    fn scroll_by(&mut self, delta: isize) {
+        let top_row = self.scroll_to_top_row.unwrap_or(self.top_row);
+        self.scroll_to_top_row = Some(top_row.saturating_add_signed(delta));
+    }
+
     /// Moves `delta` changes forward or back, stopping at the first and last.
     fn step_change(&mut self, delta: isize) {
         let Some(last) = self.diff.changes.len().checked_sub(1) else {
@@ -145,7 +198,7 @@ impl TextView {
             Some(c) => c.saturating_add_signed(delta).min(last),
         };
         self.current_change = Some(next);
-        self.scroll_to_row = Some(self.diff.changes[next]);
+        self.scroll_to_top_row = Some(self.diff.changes[next].saturating_sub(CONTEXT_ROWS));
     }
 
     /// Both halves live in one scroll area so they always scroll together.
@@ -166,18 +219,19 @@ impl TextView {
 
         ui.spacing_mut().item_spacing.y = 0.0;
         let mut area = ScrollArea::vertical().auto_shrink(false);
-        if let Some(row) = self.scroll_to_row.take() {
-            // Clamped so changes near the end don't overscroll and bounce back.
+        if let Some(row) = self.scroll_to_top_row.take() {
+            // Clamped so rows near the end don't overscroll and bounce back.
             let row_height = layout.row_height;
             let max_offset = rows.len() as f32 * row_height - ui.available_height();
-            let offset = row.saturating_sub(CONTEXT_ROWS) as f32 * row_height;
+            let offset = row as f32 * row_height;
             area = area.vertical_scroll_offset(offset.min(max_offset).max(0.0));
         }
-        area.show_rows(ui, layout.row_height, rows.len(), |ui, range| {
+        let output = area.show_rows(ui, layout.row_height, rows.len(), |ui, range| {
             for row in &rows[range] {
                 layout.paint_row(ui, &self.colors, row);
             }
         });
+        self.top_row = (output.state.clamped_offset().y / layout.row_height) as usize;
     }
 }
 
@@ -220,19 +274,6 @@ fn highlight_side(
             return;
         }
         ctx.request_repaint();
-    }
-}
-
-/// The change step the pressed keys ask for: -1 for p or Shift+F7, 1 for n
-/// or F7, otherwise 0.
-fn change_step(input: &InputState) -> isize {
-    let f7 = input.key_pressed(Key::F7);
-    if input.key_pressed(Key::P) || (f7 && input.modifiers.shift) {
-        -1
-    } else if input.key_pressed(Key::N) || f7 {
-        1
-    } else {
-        0
     }
 }
 
@@ -400,6 +441,47 @@ mod tests {
         harness.key_press_modifiers(egui::Modifiers::SHIFT, Key::F7);
         harness.run();
         harness.get_by_label("change 2 of 3");
+    }
+
+    /// The view of 200 equal lines, after typing `keys` one per frame, an
+    /// uppercase letter with Shift.
+    fn typed_in_unchanged_file(keys: &str) -> Harness<'static, TextView> {
+        let text: String = (0..200).map(|i| format!("line {i}\n")).collect();
+        let diff = SideBySide::new(&text, &text);
+        let view = TextView::new(diff, "left".into(), "right".into(), Instant::now());
+        let mut harness = Harness::new_ui_state(|ui, view| view.show(ui), view);
+        harness.run();
+        for c in keys.chars() {
+            let key = Key::from_name(&c.to_uppercase().to_string()).unwrap();
+            let modifiers = if c.is_uppercase() {
+                Modifiers::SHIFT
+            } else {
+                Modifiers::NONE
+            };
+            harness.key_press_modifiers(modifiers, key);
+            harness.run();
+        }
+        harness
+    }
+
+    #[yare::parameterized(
+        j_scrolls_down_a_line = { "jjj", 3 },
+        k_scrolls_up_a_line = { "jjjk", 2 },
+        k_stops_at_the_top = { "k", 0 },
+        gg_scrolls_to_the_top = { "jjgg", 0 },
+        another_key_cancels_a_sequence_and_is_dropped = { "jjgjg", 2 },
+        a_new_sequence_starts_after_a_cancelled_one = { "jgjgg", 0 },
+    )]
+    fn line_keys_scroll(keys: &str, top_row: usize) {
+        let harness = typed_in_unchanged_file(keys);
+        assert_eq!(harness.state().top_row, top_row);
+    }
+
+    #[test]
+    fn shift_g_scrolls_to_where_scrolling_down_stops() {
+        let bottom = typed_in_unchanged_file(&"j".repeat(250)).state().top_row;
+        let harness = typed_in_unchanged_file("G");
+        assert_eq!(harness.state().top_row, bottom);
     }
 
     #[test]

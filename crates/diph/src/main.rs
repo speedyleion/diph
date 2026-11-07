@@ -1,3 +1,4 @@
+mod keymap;
 mod text_view;
 
 use std::ffi::OsString;
