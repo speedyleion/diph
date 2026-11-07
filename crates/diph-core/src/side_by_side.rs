@@ -38,17 +38,19 @@ pub struct Line {
     pub changed_words: Vec<Range<usize>>,
 }
 
-/// The rows of a side-by-side view of two buffers. Each buffer's lines
-/// appear in order, so walking the rows visits every line of each buffer
-/// once.
+/// The rows of a side-by-side view of two buffers.
 pub struct SideBySide {
+    /// The left and right buffer, whose lines the rows name by index.
+    buffers: [Buffer; 2],
     pub rows: Vec<Row>,
     /// Indices into `rows` where each run of differing rows starts.
     pub changes: Vec<usize>,
 }
 
 impl SideBySide {
-    pub fn new(left: &Buffer, right: &Buffer) -> Self {
+    /// The diff of the left and right `buffers`.
+    pub fn new(buffers: [Buffer; 2]) -> Self {
+        let [left, right] = &buffers;
         let left_lines: Vec<_> = left.lines().iter().map(String::as_str).collect();
         let right_lines: Vec<_> = right.lines().iter().map(String::as_str).collect();
         let diff = TextDiff::from_slices(&left_lines, &right_lines);
@@ -90,7 +92,15 @@ impl SideBySide {
             }
         }
 
-        Self { rows, changes }
+        Self {
+            buffers,
+            rows,
+            changes,
+        }
+    }
+
+    pub fn buffers(&self) -> &[Buffer; 2] {
+        &self.buffers
     }
 }
 
@@ -129,8 +139,8 @@ mod tests {
     /// marker, then each side's 1-based line number and text, with changed
     /// words in brackets.
     fn render(left: &str, right: &str) -> String {
-        let (left, right) = (Buffer::new(left), Buffer::new(right));
-        let diff = SideBySide::new(&left, &right);
+        let diff = SideBySide::new([Buffer::new(left), Buffer::new(right)]);
+        let [left, right] = diff.buffers();
         let mut out = String::new();
         for row in &diff.rows {
             let marker = match row.kind {
@@ -139,8 +149,8 @@ mod tests {
                 RowKind::RightOnly => '>',
                 RowKind::Changed => '~',
             };
-            let left_side = render_side(&left, row.left.as_ref());
-            let right_side = render_side(&right, row.right.as_ref());
+            let left_side = render_side(left, row.left.as_ref());
+            let right_side = render_side(right, row.right.as_ref());
             out += format!("{marker} {left_side:<26}| {right_side}").trim_end();
             out += "\n";
         }
@@ -211,7 +221,7 @@ mod tests {
 
     #[test]
     fn ignores_line_ending_differences() {
-        let diff = SideBySide::new(&Buffer::new("a\r\nb\r\nc"), &Buffer::new("a\nb\nc\n"));
+        let diff = SideBySide::new([Buffer::new("a\r\nb\r\nc"), Buffer::new("a\nb\nc\n")]);
         assert!(diff.rows.iter().all(|r| r.kind == RowKind::Equal));
     }
 

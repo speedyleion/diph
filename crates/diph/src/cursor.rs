@@ -1,6 +1,6 @@
 //! The cursor: a character on one side of a diff.
 
-use diph_core::{Buffer, SideBySide};
+use diph_core::SideBySide;
 
 /// A character on one side of a diff.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -34,11 +34,11 @@ pub struct Cursor {
 }
 
 impl Cursor {
-    /// A cursor on `diff` of the left and right `buffers`, at the start of
-    /// the right side's first line, or of the left side's when the right
-    /// side has none. `None` when neither side has lines.
-    pub fn new(diff: &SideBySide, buffers: &[Buffer; 2]) -> Option<Self> {
-        let lines = [side_lines(diff, buffers, 0), side_lines(diff, buffers, 1)];
+    /// A cursor at the start of the right side's first line, or of the left
+    /// side's when the right side has none. `None` when neither side has
+    /// lines.
+    pub fn new(diff: &SideBySide) -> Option<Self> {
+        let lines = [side_lines(diff, 0), side_lines(diff, 1)];
         let side = [1, 0].into_iter().find(|&s| !lines[s].is_empty())?;
         Some(Self {
             lines,
@@ -116,14 +116,14 @@ impl Cursor {
 }
 
 /// Where each of `side`'s lines sits in `diff`, in order.
-fn side_lines(diff: &SideBySide, buffers: &[Buffer; 2], side: usize) -> Vec<LinePlace> {
+fn side_lines(diff: &SideBySide, side: usize) -> Vec<LinePlace> {
     diff.rows
         .iter()
         .enumerate()
         .filter_map(|(row, r)| [&r.left, &r.right][side].as_ref().map(|l| (row, l)))
         .map(|(row, l)| LinePlace {
             row,
-            chars: buffers[side].lines()[l.index].chars().count(),
+            chars: diff.buffers()[side].lines()[l.index].chars().count(),
         })
         .collect()
 }
@@ -131,11 +131,11 @@ fn side_lines(diff: &SideBySide, buffers: &[Buffer; 2], side: usize) -> Vec<Line
 #[cfg(test)]
 mod tests {
     use super::*;
+    use diph_core::Buffer;
 
     /// A new cursor on the diff of the texts `left` and `right`.
     fn cursor_on(left: &str, right: &str) -> Option<Cursor> {
-        let buffers = [Buffer::new(left), Buffer::new(right)];
-        Cursor::new(&SideBySide::new(&buffers[0], &buffers[1]), &buffers)
+        Cursor::new(&SideBySide::new([Buffer::new(left), Buffer::new(right)]))
     }
 
     /// A cursor on a diff of `left` and `right`, moved to `start`.
