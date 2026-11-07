@@ -1,15 +1,6 @@
 //! The cursor: a character in a buffer.
 
-use diph_core::Buffer;
-
-/// A character in a buffer.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Position {
-    /// Index of the line in the buffer.
-    pub line: usize,
-    /// Index of the character in its line.
-    pub column: usize,
-}
+use diph_core::{Buffer, Position};
 
 /// A cursor on a character of a buffer, which each call names. It keeps
 /// its column across lines too short to reach it. In a buffer without
