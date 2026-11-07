@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- j and k scroll down and up a line, gg and G to the top and bottom
+
 ## [0.1.1] - 2025-11-05
 
 ### Added
