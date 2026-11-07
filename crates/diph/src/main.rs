@@ -107,10 +107,14 @@ fn side_path(path: &Path, label: Option<&Path>, other: &Path) -> PathBuf {
 /// The name of the comparison: the one path both sides stand for, or both
 /// paths when they differ.
 fn diff_name([left, right]: &[PathBuf; 2]) -> String {
-    if left == right {
-        left.display().to_string()
-    } else {
-        format!("{} ↔ {}", left.display(), right.display())
+    let left = left.as_path();
+    let right = right.as_path();
+    let left_name = left.file_name().unwrap_or_else(|| left.as_os_str()).to_str();
+    let right_name = right.file_name().unwrap_or_else(|| right.as_os_str()).to_str();
+
+    match (left_name, right_name) {
+        (Some(left), Some(right)) if left != right => format!("{left} ↔ {right}"),
+        (left, right) => left.or(right).unwrap_or_default().into(),
     }
 }
 
@@ -141,7 +145,6 @@ fn main() -> anyhow::Result<()> {
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title(format!("diph — {name}"))
             .with_inner_size([1400.0, 900.0]),
         ..Default::default()
     };
@@ -149,6 +152,9 @@ fn main() -> anyhow::Result<()> {
         "diph",
         options,
         Box::new(move |cc| {
+            cc.egui_ctx.send_viewport_cmd(egui::ViewportCommand::Title(
+                format!("{name} — diph"),
+            ));
             // The diff colors are picked for a dark background.
             cc.egui_ctx.set_theme(egui::Theme::Dark);
             view.highlight_in_background(paths, cc.egui_ctx.clone());
