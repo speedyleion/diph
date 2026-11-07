@@ -45,6 +45,8 @@ pub struct SideBySide {
     pub rows: Vec<Row>,
     /// Indices into `rows` where each run of differing rows starts.
     pub changes: Vec<usize>,
+    /// For the left and right side, the index into `rows` of each line.
+    line_rows: [Vec<usize>; 2],
 }
 
 impl SideBySide {
@@ -90,8 +92,37 @@ impl SideBySide {
             }
         }
 
-        Self { rows, changes }
+        let line_rows = [0, 1].map(|side| side_line_rows(&rows, side));
+        Self {
+            rows,
+            changes,
+            line_rows,
+        }
     }
+
+    /// The index into `rows` of the `line`th line of `side`, 0 for the left
+    /// side and 1 for the right.
+    pub fn row_of(&self, side: usize, line: usize) -> usize {
+        self.line_rows[side][line]
+    }
+
+    /// The first line of `side` in `row` or below it. When all of the side's
+    /// lines are above `row`, its last line instead. `None` when `side` has
+    /// no lines.
+    pub fn line_at(&self, side: usize, row: usize) -> Option<usize> {
+        let rows = &self.line_rows[side];
+        let last = rows.len().checked_sub(1)?;
+        Some(rows.partition_point(|&r| r < row).min(last))
+    }
+}
+
+/// The index into `rows` of each of `side`'s lines, in order.
+fn side_line_rows(rows: &[Row], side: usize) -> Vec<usize> {
+    rows.iter()
+        .enumerate()
+        .filter(|(_, r)| [&r.left, &r.right][side].is_some())
+        .map(|(row, _)| row)
+        .collect()
 }
 
 /// Byte ranges of the words in `left` that are not in `right`, and of the
@@ -213,6 +244,35 @@ mod tests {
     fn ignores_line_ending_differences() {
         let diff = SideBySide::new(&Buffer::new("a\r\nb\r\nc"), &Buffer::new("a\nb\nc\n"));
         assert!(diff.rows.iter().all(|r| r.kind == RowKind::Equal));
+    }
+
+    /// The diff of four lines on the left against the first and last of
+    /// them on the right, which has no line in rows 1 and 2.
+    fn two_lines_deleted() -> SideBySide {
+        SideBySide::new(&Buffer::new("a\nb\nc\nd\n"), &Buffer::new("a\nd\n"))
+    }
+
+    #[yare::parameterized(
+        a_left_line_sits_in_its_own_row = { 0, 2, 2 },
+        a_right_line_after_a_deletion_sits_below_it = { 1, 1, 3 },
+    )]
+    fn row_of(side: usize, line: usize, row: usize) {
+        assert_eq!(two_lines_deleted().row_of(side, line), row);
+    }
+
+    #[yare::parameterized(
+        a_row_with_a_line_has_that_line = { 0, 2, Some(2) },
+        a_row_without_one_has_the_line_below = { 1, 1, Some(1) },
+        a_row_past_the_last_line_has_the_last_line = { 0, 9, Some(3) },
+    )]
+    fn line_at(side: usize, row: usize, line: Option<usize>) {
+        assert_eq!(two_lines_deleted().line_at(side, row), line);
+    }
+
+    #[test]
+    fn a_side_without_lines_has_no_line_at_any_row() {
+        let diff = SideBySide::new(&Buffer::new(""), &Buffer::new("a\n"));
+        assert_eq!(diff.line_at(0, 0), None);
     }
 
     #[test]
