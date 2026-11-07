@@ -45,7 +45,9 @@ impl<A: Copy> Keymap<A> {
     /// The actions of the sequences that the keys pressed this frame
     /// complete, in order.
     pub fn actions(&mut self, input: &InputState) -> Vec<A> {
-        (input.events.iter())
+        input
+            .events
+            .iter()
             .filter_map(pressed_key)
             .filter_map(|key| self.press(key))
             .collect()
@@ -54,10 +56,13 @@ impl<A: Copy> Keymap<A> {
     /// Adds `key` to the pending sequence, returning the action it completes.
     fn press(&mut self, key: KeyboardShortcut) -> Option<A> {
         self.pending.push(key);
-        let continued: Vec<_> = (self.bindings.iter())
+        let continued: Vec<_> = self
+            .bindings
+            .iter()
             .filter(|b| b.continues(&self.pending))
             .collect();
-        let completed = (continued.iter())
+        let completed = continued
+            .iter()
             .find(|b| b.keys.len() == self.pending.len())
             .map(|b| b.action);
         if completed.is_some() || continued.is_empty() {
