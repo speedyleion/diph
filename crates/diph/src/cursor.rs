@@ -51,11 +51,10 @@ impl Cursor {
     /// Where the cursor is, with its column limited to the line's last
     /// character.
     pub fn position(&self) -> Position {
-        let last_column = self.place().chars.saturating_sub(1);
         Position {
             side: self.side,
             line: self.line,
-            column: self.column.min(last_column),
+            column: self.column.min(self.last_column()),
         }
     }
 
@@ -68,24 +67,29 @@ impl Cursor {
         &self.lines[self.side][self.line]
     }
 
-    /// Moves to `position`, which must be a line of its side.
+    /// The column of the last character of the cursor's line, or 0 when
+    /// the line is empty.
+    fn last_column(&self) -> usize {
+        self.place().chars.saturating_sub(1)
+    }
+
+    /// Moves to `position`, stopping at the last line of its side and the
+    /// last character of its line. Stays put when its side has no lines.
     pub fn set(&mut self, position: Position) {
-        Position {
-            side: self.side,
-            line: self.line,
-            column: self.column,
-        } = position;
+        let Position { side, line, column } = position;
+        if self.lines[side].is_empty() {
+            return;
+        }
+        self.side = side;
+        self.go_to_line(line);
+        self.column = column.min(self.last_column());
     }
 
     /// Moves `delta` characters right or left, stopping at either end of
     /// the line.
     pub fn move_column(&mut self, delta: isize) {
-        let position = self.position();
-        let last_column = self.place().chars.saturating_sub(1);
-        self.column = position
-            .column
-            .saturating_add_signed(delta)
-            .min(last_column);
+        let column = self.position().column.saturating_add_signed(delta);
+        self.column = column.min(self.last_column());
     }
 
     /// Moves `delta` lines down or up, stopping at the first and last line.
@@ -98,8 +102,9 @@ impl Cursor {
         self.line = line.min(self.lines[self.side].len() - 1);
     }
 
-    /// Moves to the first line of `side` in or below `row`, or to its last
-    /// line when none is. Stays put when `side` has no lines.
+    /// Moves to the first line of `side` in `row` or below it. When all of
+    /// the side's lines are above `row`, moves to its last line instead.
+    /// Stays put when `side` has no lines.
     pub fn go_to_row(&mut self, side: usize, row: usize) {
         let lines = &self.lines[side];
         if lines.is_empty() {
@@ -112,7 +117,9 @@ impl Cursor {
 
 /// Where each of `side`'s lines sits in `diff`, in order.
 fn side_lines(diff: &SideBySide, side: usize) -> Vec<LinePlace> {
-    (diff.rows.iter().enumerate())
+    diff.rows
+        .iter()
+        .enumerate()
         .filter_map(|(row, r)| [&r.left, &r.right][side].as_ref().map(|l| (row, l)))
         .map(|(row, l)| LinePlace {
             row,
@@ -132,22 +139,82 @@ mod tests {
         cursor
     }
 
-    fn position(side: usize, line: usize, column: usize) -> Position {
-        Position { side, line, column }
-    }
-
     #[yare::parameterized(
         on_the_right_side = { "a\n", "b\n", 1 },
         on_the_left_side_when_the_right_has_no_lines = { "a\n", "", 0 },
     )]
     fn starts_at_the_first_line(left: &str, right: &str, side: usize) {
         let cursor = Cursor::new(&SideBySide::new(left, right)).unwrap();
-        assert_eq!(cursor.position(), position(side, 0, 0));
+        assert_eq!(
+            cursor.position(),
+            Position {
+                side,
+                line: 0,
+                column: 0
+            }
+        );
     }
 
     #[test]
     fn there_is_none_without_lines() {
         assert!(Cursor::new(&SideBySide::new("", "")).is_none());
+    }
+
+    #[test]
+    fn set_stops_at_the_last_line() {
+        let cursor = cursor_at(
+            "",
+            "hello\nab\n",
+            Position {
+                side: 1,
+                line: 9,
+                column: 0,
+            },
+        );
+        assert_eq!(
+            cursor.position(),
+            Position {
+                side: 1,
+                line: 1,
+                column: 0
+            }
+        );
+    }
+
+    #[test]
+    fn set_keeps_a_column_past_the_end_as_the_last_character() {
+        let mut cursor = cursor_at(
+            "",
+            "hello\nab\n",
+            Position {
+                side: 1,
+                line: 1,
+                column: 9,
+            },
+        );
+        cursor.move_line(-1);
+        assert_eq!(cursor.position().column, 1);
+    }
+
+    #[test]
+    fn set_stays_put_on_a_side_without_lines() {
+        let cursor = cursor_at(
+            "",
+            "hello\n",
+            Position {
+                side: 0,
+                line: 0,
+                column: 0,
+            },
+        );
+        assert_eq!(
+            cursor.position(),
+            Position {
+                side: 1,
+                line: 0,
+                column: 0
+            }
+        );
     }
 
     #[yare::parameterized(
@@ -157,7 +224,15 @@ mod tests {
         left_stops_at_the_first_character = { -9, 0 },
     )]
     fn move_column(delta: isize, column: usize) {
-        let mut cursor = cursor_at("", "hello\n", position(1, 0, 2));
+        let mut cursor = cursor_at(
+            "",
+            "hello\n",
+            Position {
+                side: 1,
+                line: 0,
+                column: 2,
+            },
+        );
         cursor.move_column(delta);
         assert_eq!(cursor.position().column, column);
     }
@@ -169,7 +244,15 @@ mod tests {
         up_stops_at_the_first_line = { -9, 0 },
     )]
     fn move_line(delta: isize, line: usize) {
-        let mut cursor = cursor_at("", "a\nb\nc\nd\n", position(1, 1, 0));
+        let mut cursor = cursor_at(
+            "",
+            "a\nb\nc\nd\n",
+            Position {
+                side: 1,
+                line: 1,
+                column: 0,
+            },
+        );
         cursor.move_line(delta);
         assert_eq!(cursor.position().line, line);
     }
@@ -180,14 +263,30 @@ mod tests {
         a_long_enough_line_gets_the_column_back = { 3, 4 },
     )]
     fn the_column_is_kept_across_lines(delta: isize, column: usize) {
-        let mut cursor = cursor_at("", "hello\nab\n\nworld\n", position(1, 0, 4));
+        let mut cursor = cursor_at(
+            "",
+            "hello\nab\n\nworld\n",
+            Position {
+                side: 1,
+                line: 0,
+                column: 4,
+            },
+        );
         cursor.move_line(delta);
         assert_eq!(cursor.position().column, column);
     }
 
     #[test]
     fn moving_on_a_short_line_starts_from_the_column_shown() {
-        let mut cursor = cursor_at("", "hello\nab\n", position(1, 0, 4));
+        let mut cursor = cursor_at(
+            "",
+            "hello\nab\n",
+            Position {
+                side: 1,
+                line: 0,
+                column: 4,
+            },
+        );
         cursor.move_line(1);
         cursor.move_column(-1);
         assert_eq!(cursor.position().column, 0);
@@ -196,26 +295,57 @@ mod tests {
     #[test]
     fn moving_down_skips_rows_without_a_line() {
         // The right side has no line opposite "b" and "c".
-        let mut cursor = cursor_at("a\nb\nc\nd\n", "a\nd\n", position(1, 0, 0));
+        let mut cursor = cursor_at(
+            "a\nb\nc\nd\n",
+            "a\nd\n",
+            Position {
+                side: 1,
+                line: 0,
+                column: 0,
+            },
+        );
         cursor.move_line(1);
         assert_eq!((cursor.position().line, cursor.row()), (1, 3));
     }
 
     #[yare::parameterized(
-        a_row_with_a_line_goes_to_it = { 0, 2, position(0, 2, 0) },
-        a_row_without_one_goes_to_the_line_below = { 1, 1, position(1, 1, 0) },
-        a_row_past_the_last_line_goes_to_it = { 0, 9, position(0, 3, 0) },
+        a_row_with_a_line_goes_to_it = { 0, 2, Position { side: 0, line: 2, column: 0 } },
+        a_row_without_one_goes_to_the_line_below = { 1, 1, Position { side: 1, line: 1, column: 0 } },
+        a_row_past_the_last_line_goes_to_it = { 0, 9, Position { side: 0, line: 3, column: 0 } },
     )]
     fn go_to_row(side: usize, row: usize, expected: Position) {
-        let mut cursor = cursor_at("a\nb\nc\nd\n", "a\nd\n", position(0, 0, 0));
+        let mut cursor = cursor_at(
+            "a\nb\nc\nd\n",
+            "a\nd\n",
+            Position {
+                side: 0,
+                line: 0,
+                column: 0,
+            },
+        );
         cursor.go_to_row(side, row);
         assert_eq!(cursor.position(), expected);
     }
 
     #[test]
     fn go_to_row_stays_put_on_a_side_without_lines() {
-        let mut cursor = cursor_at("", "a\nb\n", position(1, 1, 0));
+        let mut cursor = cursor_at(
+            "",
+            "a\nb\n",
+            Position {
+                side: 1,
+                line: 1,
+                column: 0,
+            },
+        );
         cursor.go_to_row(0, 0);
-        assert_eq!(cursor.position(), position(1, 1, 0));
+        assert_eq!(
+            cursor.position(),
+            Position {
+                side: 1,
+                line: 1,
+                column: 0
+            }
+        );
     }
 }

@@ -50,6 +50,11 @@ and `--help` text: describe what the code does now.
   accumulators when the result reads as clearly.
 - Keep closures to a couple of lines. Make anything longer a named
   function, passing in what it needs from the enclosing scope.
+- Don't wrap an expression in parentheses that only change where
+  rustfmt breaks the line, such as `(rows.iter().enumerate())`.
+- Don't write a function that only passes its arguments on to a struct
+  literal or another function. Write the literal or call where it's
+  needed.
 
 ## Tests
 

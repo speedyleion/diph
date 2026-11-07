@@ -308,7 +308,8 @@ impl TextView {
         let cursor = self.cursor.as_ref().map(Cursor::position);
         let output = area.show_rows(ui, layout.row_height, rows.len(), |ui, range| {
             // `last` paints every row, keeping the click if one was clicked.
-            (rows[range].iter())
+            rows[range]
+                .iter()
                 .filter_map(|row| layout.paint_row(ui, &self.colors, row, cursor))
                 .last()
         });
