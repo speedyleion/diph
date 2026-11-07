@@ -1,5 +1,6 @@
 //! Side-by-side text diff view.
 
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant};
@@ -7,7 +8,7 @@ use std::time::{Duration, Instant};
 use diph_core::{Highlighter, Line, Row, RowKind, SideBySide, Span};
 use eframe::egui::{
     self, Align2, Color32, FontId, Key, KeyboardShortcut, Modifiers, Painter, Rect, ScrollArea,
-    Sense, Stroke, TextFormat, TextStyle, pos2, text::LayoutJob, vec2,
+    Sense, Stroke, TextFormat, TextStyle, UiBuilder, pos2, text::LayoutJob, vec2,
 };
 use itertools::{
     EitherOrBoth::{Both, Left, Right},
@@ -27,6 +28,19 @@ const FILLER_BG: Color32 = Color32::from_rgb(0x22, 0x24, 0x28);
 const GUTTER_FG: Color32 = Color32::from_gray(110);
 const TEXT_FG: Color32 = Color32::from_gray(210);
 const DIVIDER: Color32 = Color32::from_gray(60);
+/// Change map mark of one-sided lines.
+const ONE_SIDED_MARK: Color32 = Color32::from_rgb(0x2f, 0x8f, 0x55);
+/// Change map mark of changed lines.
+const CHANGED_MARK: Color32 = Color32::from_rgb(0x3d, 0x6f, 0xc4);
+/// Change map cover over the rows in view.
+const IN_VIEW_COVER: Color32 = Color32::from_rgba_premultiplied(24, 24, 24, 24);
+
+/// Width of the change map beside the rows.
+const MAP_WIDTH: f32 = 16.0;
+/// Gap between the change map's left and right columns.
+const MAP_GAP: f32 = 2.0;
+/// Least height of a change map mark, so one row of a long diff still shows.
+const MIN_MARK_HEIGHT: f32 = 3.0;
 
 /// Rows of unchanged context kept above a change when jumping to it.
 const CONTEXT_ROWS: usize = 3;
@@ -167,7 +181,25 @@ impl TextView {
         egui::Panel::bottom("status_bar").show(ui, |ui| {
             ui.weak(format!("started in {} ms", startup_time.as_millis()));
         });
-        egui::CentralPanel::default().show(ui, |ui| self.rows_ui(ui));
+        egui::CentralPanel::default().show(ui, |ui| self.diff_ui(ui));
+    }
+
+    /// The rows, beside a map of the whole diff that marks each side's
+    /// changes in a column of its own and covers the rows in view.
+    fn diff_ui(&mut self, ui: &mut egui::Ui) {
+        let rect = ui.available_rect_before_wrap();
+        let (rows_rect, map) = rect.split_left_right_at_x(rect.right() - MAP_WIDTH);
+        let rows_builder = UiBuilder::new().max_rect(rows_rect);
+        let in_view = ui.scope_builder(rows_builder, |ui| self.rows_ui(ui)).inner;
+
+        let y = map_y(map, self.diff.rows.len(), in_view.end - in_view.start);
+        let painter = ui.painter();
+        painter.rect_filled(map, 0.0, FILLER_BG);
+        for (mark, color) in change_marks(&self.diff.rows, map, &y) {
+            painter.rect_filled(mark, 0.0, color);
+        }
+        let cover = Rect::from_x_y_ranges(map.x_range(), y(in_view.start)..=y(in_view.end));
+        painter.rect_filled(cover, 0.0, IN_VIEW_COVER);
     }
 
     fn perform(&mut self, action: Action) {
@@ -202,7 +234,8 @@ impl TextView {
     }
 
     /// Both halves live in one scroll area so they always scroll together.
-    fn rows_ui(&mut self, ui: &mut egui::Ui) {
+    /// Returns the rows in view, in fractions of a row.
+    fn rows_ui(&mut self, ui: &mut egui::Ui) -> Range<f32> {
         let font = TextStyle::Monospace.resolve(ui.style());
         let char_width = ui.fonts_mut(|f| f.glyph_width(&font, '0'));
         let rows = &self.diff.rows;
@@ -231,7 +264,9 @@ impl TextView {
                 layout.paint_row(ui, &self.colors, row);
             }
         });
-        self.top_row = (output.state.clamped_offset().y / layout.row_height) as usize;
+        let top = output.state.clamped_offset().y / layout.row_height;
+        self.top_row = top as usize;
+        top..top + output.inner_rect.height() / layout.row_height
     }
 }
 
@@ -283,6 +318,61 @@ fn background(row: &Row) -> Option<Color32> {
         RowKind::Equal => None,
         RowKind::LeftOnly | RowKind::RightOnly => Some(ONE_SIDED_BG),
         RowKind::Changed => Some(CHANGED_BG),
+    }
+}
+
+/// The y on `map` of the top of a row of a diff of `rows` rows, with
+/// `rows_in_view` rows fitting in the view. A diff shorter than the view
+/// keeps the view's spacing.
+fn map_y(map: Rect, rows: usize, rows_in_view: f32) -> impl Fn(f32) -> f32 {
+    let row_height = map.height() / (rows as f32).max(rows_in_view);
+    move |row| map.top() + row * row_height
+}
+
+/// The marks of each side's differing lines, in the left and right column
+/// of `map`.
+fn change_marks(rows: &[Row], map: Rect, y: impl Fn(f32) -> f32) -> Vec<(Rect, Color32)> {
+    let center = map.center().x;
+    let left = map.with_max_x(center - MAP_GAP / 2.0);
+    let right = map.with_min_x(center + MAP_GAP / 2.0);
+    let mut marks = column_marks(rows, left, &y, RowKind::LeftOnly);
+    marks.extend(column_marks(rows, right, &y, RowKind::RightOnly));
+    marks
+}
+
+/// A mark across `column` for each run of rows of one kind that are
+/// changed or `one_sided`, from the `y` of its first row to the `y` past
+/// its last, and at least [`MIN_MARK_HEIGHT`] tall.
+fn column_marks(
+    rows: &[Row],
+    column: Rect,
+    y: impl Fn(f32) -> f32,
+    one_sided: RowKind,
+) -> Vec<(Rect, Color32)> {
+    let mut marks = Vec::new();
+    let mut start = 0;
+    for (count, color) in rows
+        .iter()
+        .map(|r| mark_color(r.kind, one_sided))
+        .dedup_with_count()
+    {
+        if let Some(color) = color {
+            let top = y(start as f32);
+            let bottom = y((start + count) as f32).max(top + MIN_MARK_HEIGHT);
+            marks.push((Rect::from_x_y_ranges(column.x_range(), top..=bottom), color));
+        }
+        start += count;
+    }
+    marks
+}
+
+/// The change map color of a row of `kind` in the column whose side's
+/// one-sided rows are `one_sided`, if the column marks it.
+fn mark_color(kind: RowKind, one_sided: RowKind) -> Option<Color32> {
+    match kind {
+        RowKind::Changed => Some(CHANGED_MARK),
+        _ if kind == one_sided => Some(ONE_SIDED_MARK),
+        _ => None,
     }
 }
 
@@ -482,6 +572,45 @@ mod tests {
         let bottom = typed_in_unchanged_file(&"j".repeat(250)).state().top_row;
         let harness = typed_in_unchanged_file("G");
         assert_eq!(harness.state().top_row, bottom);
+    }
+
+    #[yare::parameterized(
+        a_run_sits_at_its_share_of_the_map = { 200, 50..60, 20.0, 25.0..=30.0 },
+        a_one_row_change_gets_the_least_height = { 800, 400..401, 20.0, 50.0..=53.0 },
+        a_diff_shorter_than_the_view_keeps_its_spacing = { 10, 5..7, 50.0, 10.0..=14.0 },
+    )]
+    fn change_marks(
+        lines: usize,
+        changed: Range<usize>,
+        rows_in_view: f32,
+        y_range: std::ops::RangeInclusive<f32>,
+    ) {
+        let left: Vec<_> = (0..lines).map(|i| format!("line {i}\n")).collect();
+        let mut right = left.clone();
+        right[changed.clone()].fill("changed\n".to_owned());
+        let diff = SideBySide::new(&left.concat(), &right.concat());
+        let map = Rect::from_min_size(pos2(0.0, 0.0), vec2(10.0, 100.0));
+
+        let y = map_y(map, diff.rows.len(), rows_in_view);
+        let marks = super::change_marks(&diff.rows, map, y);
+
+        let left = Rect::from_x_y_ranges(0.0..=4.0, y_range.clone());
+        let right = Rect::from_x_y_ranges(6.0..=10.0, y_range);
+        assert_eq!(marks, vec![(left, CHANGED_MARK), (right, CHANGED_MARK)]);
+    }
+
+    #[yare::parameterized(
+        deleted_lines_mark_the_left_column = { "a\nb\nc\nd\n", "a\nd\n", 0.0..=4.0 },
+        added_lines_mark_the_right_column = { "a\nd\n", "a\nb\nc\nd\n", 6.0..=10.0 },
+    )]
+    fn one_sided_marks(left: &str, right: &str, x_range: std::ops::RangeInclusive<f32>) {
+        let diff = SideBySide::new(left, right);
+        let map = Rect::from_min_size(pos2(0.0, 0.0), vec2(10.0, 100.0));
+
+        let marks = super::change_marks(&diff.rows, map, map_y(map, diff.rows.len(), 4.0));
+
+        let mark = Rect::from_x_y_ranges(x_range, 25.0..=75.0);
+        assert_eq!(marks, vec![(mark, ONE_SIDED_MARK)]);
     }
 
     #[test]
