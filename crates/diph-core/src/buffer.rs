@@ -32,17 +32,37 @@ pub struct Edit {
 #[derive(Default)]
 pub struct Buffer {
     lines: Vec<String>,
+    /// Whether lines end in CRLF rather than LF.
+    crlf: bool,
+    /// Whether the last line has a line ending.
+    ends_with_line_ending: bool,
 }
 
 impl Buffer {
     /// Both LF and CRLF end a line, and a last line without a line ending
     /// still counts.
     pub fn new(text: &str) -> Self {
-        let lines = text
-            .split_inclusive('\n')
-            .map(|l| l.trim_end_matches(['\n', '\r']).to_owned())
-            .collect();
-        Self { lines }
+        let lines: Vec<_> = text.split_inclusive('\n').collect();
+        Self {
+            crlf: lines.first().is_some_and(|l| l.ends_with("\r\n")),
+            ends_with_line_ending: text.ends_with('\n'),
+            lines: lines
+                .iter()
+                .map(|l| l.trim_end_matches(['\n', '\r']).to_owned())
+                .collect(),
+        }
+    }
+
+    /// The buffer's text, with each line ending in the line ending of the
+    /// text's first line, and the last line ending in one if the text's
+    /// last line did.
+    pub fn text(&self) -> String {
+        let line_ending = if self.crlf { "\r\n" } else { "\n" };
+        let mut text = self.lines.join(line_ending);
+        if self.ends_with_line_ending {
+            text.push_str(line_ending);
+        }
+        text
     }
 
     pub fn lines(&self) -> &[String] {
@@ -236,5 +256,22 @@ mod tests {
         let buffer = Buffer::new("héllo\n");
         let at = BytePosition { line: 0, byte: 3 };
         assert_eq!(buffer.position(at), Position { line: 0, column: 2 });
+    }
+
+    #[yare::parameterized(
+        lf = { "a\nb\n" },
+        crlf = { "a\r\nb\r\n" },
+        without_an_ending_on_the_last_line = { "a\nb" },
+        empty = { "" },
+    )]
+    fn text_is_the_text_read(text: &str) {
+        assert_eq!(Buffer::new(text).text(), text);
+    }
+
+    #[test]
+    fn inserted_lines_end_like_the_others() {
+        let mut buffer = Buffer::new("a\r\nb\r\n");
+        buffer.insert(Position { line: 0, column: 1 }, "\nc");
+        assert_eq!(buffer.text(), "a\r\nc\r\nb\r\n");
     }
 }
