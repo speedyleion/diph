@@ -7,7 +7,9 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
-use diph_core::{Buffer, Edit, Highlighter, Line, Position, Row, RowKind, SideBySide, Span};
+use diph_core::{
+    Buffer, Edit, Highlighter, Line, Position, Row, RowKind, SideBySide, SideColors, Span,
+};
 use eframe::egui::{
     self, Align2, Color32, CursorIcon, FontId, Galley, Key, KeyboardShortcut, Modifiers, Painter,
     Pos2, Rect, ScrollArea, Sense, Stroke, TextFormat, TextStyle, UiBuilder, epaint::text::Glyph,
@@ -365,16 +367,11 @@ impl TextView {
     }
 
     /// Edits the buffer of `side` with `edit` and starts highlighting the
-    /// side again. Until the colors arrive, the lines the edit wrote have
-    /// none and the other lines keep theirs. Returns the change `edit` made.
+    /// side again. Until the colors arrive, the side's colors move with the
+    /// text the edit changed. Returns the change `edit` made.
     fn edit(&mut self, side: usize, edit: impl FnOnce(&mut Buffer) -> Edit) -> Edit {
         let edit = self.diff.edit(side, edit);
-        let colors = &mut self.colors[side].lines;
-        if edit.start.line < colors.len() {
-            let end = (edit.deleted_end.line + 1).min(colors.len());
-            let written = edit.inserted_end.line - edit.start.line + 1;
-            colors.splice(edit.start.line..end, vec![Vec::new(); written]);
-        }
+        self.colors[side].apply(&edit);
         self.highlight_runs[side].fetch_add(1, Ordering::Relaxed);
         self.colors_received[side] = 0;
         self.highlight(side);
@@ -823,19 +820,6 @@ fn column_at(glyphs: &[Glyph], x: f32) -> usize {
     column.min(glyphs.len().saturating_sub(1))
 }
 
-/// Syntax colors of one side's lines, by line index.
-#[derive(Default)]
-struct SideColors {
-    lines: Vec<Vec<Span>>,
-}
-
-impl SideColors {
-    /// The colors of `line`; empty until highlighted.
-    fn line(&self, line: &Line) -> &[Span] {
-        self.lines.get(line.index).map_or(&[], Vec::as_slice)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1122,15 +1106,15 @@ mod tests {
     }
 
     #[test]
-    fn typing_drops_the_colors_of_the_lines_it_edits() {
+    fn typing_keeps_the_colors_of_the_text_it_moves() {
         let mut view = unchanged_file();
         view.colors[1] = colors_per_character(&view.diff.buffers()[1]);
         let mut harness = Harness::new_ui_state(|ui, view| view.show(ui), view);
         harness.run();
         press(&mut harness, "l i Enter");
         let lines = &harness.state().colors[1].lines;
-        // "line 0" split in two, then "line 1" with its six colors.
-        assert_eq!([lines[0].len(), lines[1].len(), lines[2].len()], [0, 0, 6]);
+        // "line 0" split into "l" and "ine 0", then "line 1".
+        assert_eq!([lines[0].len(), lines[1].len(), lines[2].len()], [1, 5, 6]);
     }
 
     #[test]
