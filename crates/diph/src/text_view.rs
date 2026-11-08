@@ -845,8 +845,7 @@ mod tests {
 
     /// The view of 200 equal lines, after pressing `keys` one per frame.
     /// `keys` are separated by spaces, each a character, uppercase with
-    /// Shift, a key name such as `Down`, or either with `C-` for Ctrl. A
-    /// character without Ctrl also types itself, as a keyboard does.
+    /// Shift, a key name such as `Down`, or either with `C-` for Ctrl.
     fn typed_in_unchanged_file(keys: &str) -> Harness<'static, TextView> {
         let mut harness = Harness::new_ui_state(|ui, view| view.show(ui), unchanged_file());
         harness.run();
