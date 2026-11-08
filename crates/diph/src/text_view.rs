@@ -18,7 +18,7 @@ use itertools::{
 };
 
 use crate::cursor::Cursor;
-use crate::keymap::Keymap;
+use crate::keymap::{Keymap, pressed_key};
 
 /// Background of a line with nothing opposite it.
 const ONE_SIDED_BG: Color32 = Color32::from_rgb(0x1b, 0x3d, 0x2a);
@@ -34,6 +34,8 @@ const DIVIDER: Color32 = Color32::from_gray(60);
 const CURSOR_BG: Color32 = TEXT_FG;
 /// Color of the character under the cursor.
 const CURSOR_FG: Color32 = Color32::from_gray(20);
+/// Width of the cursor in insert mode, a bar before its column.
+const CURSOR_BAR_WIDTH: f32 = 2.0;
 /// Change map mark of one-sided lines.
 const ONE_SIDED_MARK: Color32 = Color32::from_rgb(0x2f, 0x8f, 0x55);
 /// Change map mark of changed lines.
@@ -73,13 +75,27 @@ enum Action {
     LeftSide,
     RightSide,
     Close,
+    Insert(InsertAt),
+    NormalMode,
 }
 
-/// p or Shift+F7 and n or F7 step through changes. h, j, k, and l or the
-/// arrow keys move the cursor a character or a line, gg and G move it to
-/// the first and last line, and Ctrl+W h and Ctrl+W l move it to the left
-/// and right side. ZZ closes the window.
-fn keymap() -> Keymap<Action> {
+/// Where insert mode puts the cursor.
+#[derive(Clone, Copy)]
+enum InsertAt {
+    /// Before the character under the cursor.
+    BeforeCursor,
+    /// After the character under the cursor.
+    AfterCursor,
+}
+
+/// Which keymap keys go to, as in vim.
+#[derive(Clone, Copy, PartialEq)]
+enum Mode {
+    Normal,
+    Insert,
+}
+
+fn normal_keymap() -> Keymap<Action> {
     let key = |key| KeyboardShortcut::new(Modifiers::NONE, key);
     let shift = |key| KeyboardShortcut::new(Modifiers::SHIFT, key);
     let ctrl = |key| KeyboardShortcut::new(Modifiers::CTRL, key);
@@ -103,6 +119,19 @@ fn keymap() -> Keymap<Action> {
         (vec![ctrl(Key::W), key(Key::L)], Action::RightSide),
         (vec![ctrl(Key::W), ctrl(Key::L)], Action::RightSide),
         (vec![shift(Key::Z), shift(Key::Z)], Action::Close),
+        (vec![key(Key::I)], Action::Insert(InsertAt::BeforeCursor)),
+        (vec![key(Key::A)], Action::Insert(InsertAt::AfterCursor)),
+    ])
+}
+
+fn insert_keymap() -> Keymap<Action> {
+    let key = |key| KeyboardShortcut::new(Modifiers::NONE, key);
+    Keymap::new([
+        (vec![key(Key::ArrowLeft)], Action::CharLeft),
+        (vec![key(Key::ArrowRight)], Action::CharRight),
+        (vec![key(Key::ArrowDown)], Action::LineDown),
+        (vec![key(Key::ArrowUp)], Action::LineUp),
+        (vec![key(Key::Escape)], Action::NormalMode),
     ])
 }
 
@@ -123,7 +152,9 @@ pub struct TextView {
     cursor_side: Option<usize>,
     /// The cursor in the buffer of `cursor_side`.
     cursor: Cursor,
-    keymap: Keymap<Action>,
+    mode: Mode,
+    normal_keys: Keymap<Action>,
+    insert_keys: Keymap<Action>,
     /// Syntax colors of the left and right side, filled in from the top as
     /// the background highlighter delivers them.
     colors: [SideColors; 2],
@@ -156,7 +187,9 @@ impl TextView {
             scroll_to_top_row: None,
             top_row: 0,
             rows_in_view: 0,
-            keymap: keymap(),
+            mode: Mode::Normal,
+            normal_keys: normal_keymap(),
+            insert_keys: insert_keymap(),
             colors: Default::default(),
             colors_rx: None,
             started,
@@ -184,9 +217,17 @@ impl TextView {
                 self.colors[chunk.side].lines.extend(chunk.lines);
             }
         }
-        let actions = ui.input(|i| self.keymap.actions(i));
-        for action in actions {
-            self.perform(ui.ctx(), action);
+        // One key at a time, so a key that switches modes sends the keys
+        // after it to the other mode's keymap.
+        let events = ui.input(|i| i.events.clone());
+        for key in events.iter().filter_map(pressed_key) {
+            let keymap = match self.mode {
+                Mode::Normal => &mut self.normal_keys,
+                Mode::Insert => &mut self.insert_keys,
+            };
+            if let Some(action) = keymap.press(key) {
+                self.perform(ui.ctx(), action);
+            }
         }
 
         egui::Panel::top("text_header").show(ui, |ui| {
@@ -208,7 +249,12 @@ impl TextView {
             });
         });
         egui::Panel::bottom("status_bar").show(ui, |ui| {
-            ui.weak(format!("started in {} ms", startup_time.as_millis()));
+            ui.horizontal(|ui| {
+                if self.mode == Mode::Insert {
+                    ui.strong("-- INSERT --");
+                }
+                ui.weak(format!("started in {} ms", startup_time.as_millis()));
+            });
         });
         egui::CentralPanel::default().show(ui, |ui| self.diff_ui(ui));
     }
@@ -244,7 +290,33 @@ impl TextView {
             Action::LeftSide => self.switch_side(0),
             Action::RightSide => self.switch_side(1),
             Action::Close => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+            Action::Insert(at) => self.insert(at),
+            Action::NormalMode => self.leave_insert(),
         }
+    }
+
+    /// Switches to insert mode with the cursor between characters `at` the
+    /// cursor.
+    fn insert(&mut self, at: InsertAt) {
+        self.mode = Mode::Insert;
+        let offset = match at {
+            InsertAt::BeforeCursor => 0,
+            InsertAt::AfterCursor => 1,
+        };
+        self.move_cursor(|c, b| {
+            c.set_between_characters(b, true);
+            c.move_column(b, offset);
+        });
+    }
+
+    /// Switches to normal mode with the cursor on the character before it,
+    /// as vim does.
+    fn leave_insert(&mut self) {
+        self.mode = Mode::Normal;
+        self.move_cursor(|c, b| {
+            c.move_column(b, -1);
+            c.set_between_characters(b, false);
+        });
     }
 
     /// The side with the cursor, and where the cursor is in its buffer.
@@ -326,6 +398,7 @@ impl TextView {
             gutter_width: (digits + 2.0) * char_width,
             char_width,
             font,
+            bar_cursor: self.mode == Mode::Insert,
         };
 
         ui.spacing_mut().item_spacing.y = 0.0;
@@ -467,6 +540,8 @@ struct RowLayout {
     gutter_width: f32,
     row_height: f32,
     half_width: f32,
+    /// Whether the cursor is a bar before its column, as in insert mode.
+    bar_cursor: bool,
 }
 
 impl RowLayout {
@@ -505,7 +580,7 @@ impl RowLayout {
             let (pos, galley) = self.paint_half(ui, half, line, text, spans, background);
             let glyphs = galley.rows.first().map_or(&[][..], |r| &r.glyphs);
             if let Some((_, c)) = cursor.filter(|(s, c)| *s == side && c.line == line.index) {
-                self.paint_cursor(painter, half, pos, glyphs.get(c.column));
+                self.paint_cursor(painter, half, pos, glyphs, c.column);
             }
             if let Some(click) = click.filter(|p| half.contains(*p)) {
                 let column = column_at(glyphs, click.x - pos.x);
@@ -517,15 +592,30 @@ impl RowLayout {
         clicked
     }
 
-    /// Paints the cursor as a block over `glyph`, a character of a line in
-    /// `half` drawn from `pos`, or over the line's start when it has none.
-    fn paint_cursor(&self, painter: &Painter, half: Rect, pos: Pos2, glyph: Option<&Glyph>) {
-        let (x, width) = glyph.map_or((0.0, self.char_width), |g| (g.pos.x, g.advance_width));
-        let block = Rect::from_x_y_ranges(pos.x + x..=pos.x + x + width, half.y_range());
+    /// Paints the cursor at `column` of a line in `half` whose `glyphs` are
+    /// drawn from `pos`: a bar before the column in insert mode, else a
+    /// block over its character, or over the line's start when it has none.
+    fn paint_cursor(
+        &self,
+        painter: &Painter,
+        half: Rect,
+        pos: Pos2,
+        glyphs: &[Glyph],
+        column: usize,
+    ) {
+        let glyph = glyphs.get(column);
+        let end_x = glyphs.last().map_or(0.0, Glyph::max_x);
+        let x = pos.x + glyph.map_or(end_x, |g| g.pos.x);
+        let width = match (self.bar_cursor, glyph) {
+            (true, _) => CURSOR_BAR_WIDTH,
+            (false, Some(g)) => g.advance_width,
+            (false, None) => self.char_width,
+        };
+        let block = Rect::from_x_y_ranges(x..=x + width, half.y_range());
         let text_rect = Rect::from_min_max(pos2(pos.x, half.top()), half.max);
         let painter = painter.with_clip_rect(text_rect);
         painter.rect_filled(block, 0.0, CURSOR_BG);
-        if let Some(glyph) = glyph {
+        if let Some(glyph) = glyph.filter(|_| !self.bar_cursor) {
             let (align, font) = (Align2::LEFT_CENTER, self.font.clone());
             painter.text(block.left_center(), align, glyph.chr, font, CURSOR_FG);
         }
@@ -843,5 +933,31 @@ mod tests {
         harness.step();
         let commands = &harness.output().viewport_output[&egui::ViewportId::ROOT].commands;
         assert!(commands.contains(&egui::ViewportCommand::Close));
+    }
+
+    #[yare::parameterized(
+        i_keeps_the_cursor_on_its_column = { "l l i", 2 },
+        a_moves_it_after_its_character = { "l l a", 3 },
+        a_on_the_last_character_moves_past_the_end = { "l l l l l a", 6 },
+        escape_moves_it_back_a_character = { "l l a Escape", 2 },
+        escape_at_the_start_of_a_line_keeps_it_there = { "i Escape", 0 },
+        insert_mode_arrows_reach_past_the_end = { "i Right Right Right Right Right Right Right", 6 },
+        insert_mode_ignores_normal_mode_keys = { "i l l", 0 },
+    )]
+    fn mode_keys_move_the_cursor(keys: &str, column: usize) {
+        let harness = typed_in_unchanged_file(keys);
+        let cursor = harness.state().cursor_position();
+        assert_eq!(cursor, Some((1, Position { line: 0, column })));
+    }
+
+    #[yare::parameterized(
+        after_i = { "i", true },
+        after_a = { "a", true },
+        not_after_escape = { "i Escape", false },
+        not_before_i = { "", false },
+    )]
+    fn the_status_bar_shows_insert_mode(keys: &str, shown: bool) {
+        let harness = typed_in_unchanged_file(keys);
+        assert_eq!(harness.query_by_label("-- INSERT --").is_some(), shown);
     }
 }

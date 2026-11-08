@@ -10,30 +10,41 @@ pub struct Cursor {
     line: usize,
     /// The column to show on lines long enough to reach it.
     column: usize,
+    /// Whether the cursor sits between characters, before the one at its
+    /// column, instead of on that character. Between characters it can
+    /// also sit after a line's last character.
+    between_characters: bool,
 }
 
 impl Cursor {
     /// Where the cursor is in `buffer`, with its column limited to the
-    /// line's last character.
+    /// line's last column.
     pub fn position(&self, buffer: &Buffer) -> Position {
         Position {
             line: self.line,
-            column: self.column.min(last_column(buffer, self.line)),
+            column: self.column.min(self.last_column(buffer)),
         }
     }
 
     /// Moves to `position` in `buffer`, stopping at its last line and the
-    /// last character of the line.
+    /// last column of the line.
     pub fn set(&mut self, buffer: &Buffer, position: Position) {
         self.go_to_line(buffer, position.line);
-        self.column = position.column.min(last_column(buffer, self.line));
+        self.column = position.column.min(self.last_column(buffer));
+    }
+
+    /// Places the cursor between characters or on one, at the column it
+    /// shows.
+    pub fn set_between_characters(&mut self, buffer: &Buffer, between: bool) {
+        self.set(buffer, self.position(buffer));
+        self.between_characters = between;
     }
 
     /// Moves `delta` characters right or left, stopping at either end of
     /// the line.
     pub fn move_column(&mut self, buffer: &Buffer, delta: isize) {
         let column = self.position(buffer).column.saturating_add_signed(delta);
-        self.column = column.min(last_column(buffer, self.line));
+        self.column = column.min(self.last_column(buffer));
     }
 
     /// Moves `delta` lines down or up, stopping at the first and last line.
@@ -45,13 +56,19 @@ impl Cursor {
     pub fn go_to_line(&mut self, buffer: &Buffer, line: usize) {
         self.line = line.min(buffer.lines().len().saturating_sub(1));
     }
-}
 
-/// The column of the last character of `line` in `buffer`, or 0 when the
-/// line is empty or missing.
-fn last_column(buffer: &Buffer, line: usize) -> usize {
-    let chars = buffer.lines().get(line).map_or(0, |l| l.chars().count());
-    chars.saturating_sub(1)
+    /// The last column the cursor can take on its line in `buffer`.
+    fn last_column(&self, buffer: &Buffer) -> usize {
+        let chars = buffer
+            .lines()
+            .get(self.line)
+            .map_or(0, |l| l.chars().count());
+        if self.between_characters {
+            chars
+        } else {
+            chars.saturating_sub(1)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -129,5 +146,33 @@ mod tests {
         cursor.move_line(&buffer, 1);
         cursor.move_column(&buffer, -1);
         assert_eq!(cursor.position(&buffer).column, 0);
+    }
+
+    #[yare::parameterized(
+        on_the_last_character = { "hello\n", 0, 4 },
+        on_a_line_shorter_than_its_column = { "hello\nab\n", 1, 1 },
+    )]
+    fn placing_between_characters_keeps_the_column_shown(text: &str, delta: isize, column: usize) {
+        let (mut cursor, buffer) = cursor_at(text, Position { line: 0, column: 4 });
+        cursor.move_line(&buffer, delta);
+        cursor.set_between_characters(&buffer, true);
+        assert_eq!(cursor.position(&buffer).column, column);
+    }
+
+    #[test]
+    fn between_characters_it_moves_past_the_last_one() {
+        let (mut cursor, buffer) = cursor_at("hello\n", Position { line: 0, column: 4 });
+        cursor.set_between_characters(&buffer, true);
+        cursor.move_column(&buffer, 1);
+        assert_eq!(cursor.position(&buffer).column, 5);
+    }
+
+    #[test]
+    fn placed_on_a_character_from_past_the_last_it_moves_onto_the_last() {
+        let (mut cursor, buffer) = cursor_at("hello\n", Position { line: 0, column: 4 });
+        cursor.set_between_characters(&buffer, true);
+        cursor.move_column(&buffer, 1);
+        cursor.set_between_characters(&buffer, false);
+        assert_eq!(cursor.position(&buffer).column, 4);
     }
 }
