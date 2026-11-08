@@ -50,6 +50,11 @@ crate descriptions, and `--help` text: describe what the code does now.
   destructured right away, such as an iterator's pairs.
 - When a nested collection's layers mean different things, wrap a layer
   in a named type (`SideColors`, not `Vec<Vec<Span>>`).
+- Keep values that describe the same thing together in a struct, and
+  hold one collection of that struct rather than a collection per value
+  or a `left_`/`right_` pair of fields (`files: [SideFile; 2]` holding
+  each side's label and path, not `labels: [String; 2]` beside
+  `paths: [PathBuf; 2]`).
 - Prefer iterator chains and `collect()` to `for` loops over `mut`
   accumulators when the result reads as clearly.
 - Keep closures to a couple of lines. Make anything longer a named
