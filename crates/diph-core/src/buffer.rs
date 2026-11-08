@@ -11,6 +11,23 @@ pub struct Position {
     pub column: usize,
 }
 
+/// A place in a buffer, as a line and a byte index in it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct BytePosition {
+    pub line: usize,
+    pub byte: usize,
+}
+
+/// A change to a buffer: the text from `start` up to `deleted_end` was
+/// replaced by text that ends at `inserted_end`. `deleted_end` is where
+/// the deleted text ended before the change.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Edit {
+    pub start: BytePosition,
+    pub deleted_end: BytePosition,
+    pub inserted_end: BytePosition,
+}
+
 /// The lines of one side's text, without their line endings.
 #[derive(Default)]
 pub struct Buffer {
@@ -35,53 +52,84 @@ impl Buffer {
     /// Inserts `text` at `at`, splitting the line at each newline in
     /// `text`. `at` stops at the end of its line, a line past the last stops
     /// at the end of the buffer, and a buffer without lines gets one.
-    /// Returns the position just past the inserted text.
-    pub fn insert(&mut self, at: Position, text: &str) -> Position {
+    pub fn insert(&mut self, at: Position, text: &str) -> Edit {
         if self.lines.is_empty() {
             self.lines.push(String::new());
         }
-        let (line, byte) = self.byte_position(at);
-        let tail = self.lines[line].split_off(byte);
+        let start = self.byte_position(at);
+        let tail = self.lines[start.line].split_off(start.byte);
         let mut pieces = text.split('\n');
-        self.lines[line].push_str(pieces.next().unwrap_or_default());
+        self.lines[start.line].push_str(pieces.next().unwrap_or_default());
         let new_lines: Vec<_> = pieces.map(str::to_owned).collect();
-        let last = line + new_lines.len();
-        self.lines.splice(line + 1..line + 1, new_lines);
-        let column = self.lines[last].chars().count();
+        let last = start.line + new_lines.len();
+        self.lines.splice(start.line + 1..start.line + 1, new_lines);
+        let inserted_end = BytePosition {
+            line: last,
+            byte: self.lines[last].len(),
+        };
         self.lines[last].push_str(&tail);
-        Position { line: last, column }
+        Edit {
+            start,
+            deleted_end: start,
+            inserted_end,
+        }
     }
 
     /// Removes the text from `range.start` up to `range.end`, joining their
     /// lines. Each end stops at the end of its line, and a line past the
     /// last stops at the end of the buffer. Removes nothing when `range.end`
     /// is not after `range.start`.
-    pub fn delete(&mut self, range: Range<Position>) {
+    pub fn delete(&mut self, range: Range<Position>) -> Edit {
+        let start = self.byte_position(range.start);
+        let unchanged = Edit {
+            start,
+            deleted_end: start,
+            inserted_end: start,
+        };
         if self.lines.is_empty() {
-            return;
+            return unchanged;
         }
-        let (start_line, start_byte) = self.byte_position(range.start);
-        let (end_line, end_byte) = self.byte_position(range.end);
-        if (end_line, end_byte) <= (start_line, start_byte) {
-            return;
+        let end = self.byte_position(range.end);
+        if end <= start {
+            return unchanged;
         }
-        let tail = self.lines[end_line].split_off(end_byte);
-        self.lines[start_line].truncate(start_byte);
-        self.lines[start_line].push_str(&tail);
-        self.lines.drain(start_line + 1..=end_line);
+        let tail = self.lines[end.line].split_off(end.byte);
+        self.lines[start.line].truncate(start.byte);
+        self.lines[start.line].push_str(&tail);
+        self.lines.drain(start.line + 1..=end.line);
+        Edit {
+            deleted_end: end,
+            ..unchanged
+        }
     }
 
-    /// The line of `position` and the byte index in it of `position`'s
-    /// column, stopping at the line's end. A line past the last stops at the
-    /// end of the buffer. The buffer must have lines.
-    fn byte_position(&self, position: Position) -> (usize, usize) {
-        let last = self.lines.len() - 1;
+    /// The character position of `at`, which must be in the buffer.
+    pub fn position(&self, at: BytePosition) -> Position {
+        let column = self.lines[at.line][..at.byte].chars().count();
+        Position {
+            line: at.line,
+            column,
+        }
+    }
+
+    /// Where `position` is in bytes, stopping at the end of its line. A line
+    /// past the last stops at the end of the buffer, and a buffer without
+    /// lines has only the start.
+    fn byte_position(&self, position: Position) -> BytePosition {
+        let Some(last) = self.lines.len().checked_sub(1) else {
+            return BytePosition { line: 0, byte: 0 };
+        };
         if position.line > last {
-            return (last, self.lines[last].len());
+            let byte = self.lines[last].len();
+            return BytePosition { line: last, byte };
         }
         let text = &self.lines[position.line];
         let byte = text.char_indices().nth(position.column);
-        (position.line, byte.map_or(text.len(), |(i, _)| i))
+        let byte = byte.map_or(text.len(), |(i, _)| i);
+        BytePosition {
+            line: position.line,
+            byte,
+        }
     }
 }
 
@@ -117,13 +165,29 @@ mod tests {
     }
 
     #[yare::parameterized(
-        on_one_line = { Position { line: 0, column: 2 }, "XY", Position { line: 0, column: 4 } },
-        on_the_last_inserted_line = { Position { line: 0, column: 2 }, "a\nbc", Position { line: 1, column: 2 } },
-        from_where_a_column_past_the_end_stopped = { Position { line: 0, column: 9 }, "!", Position { line: 0, column: 6 } },
+        on_one_line = { "hello\n", Position { line: 0, column: 2 }, "XY", BytePosition { line: 0, byte: 2 }, BytePosition { line: 0, byte: 4 } },
+        ending_on_the_last_inserted_line = { "hello\n", Position { line: 0, column: 2 }, "a\nbc", BytePosition { line: 0, byte: 2 }, BytePosition { line: 1, byte: 2 } },
+        from_where_a_column_past_the_end_stopped = { "hello\n", Position { line: 0, column: 9 }, "!", BytePosition { line: 0, byte: 5 }, BytePosition { line: 0, byte: 6 } },
+        in_bytes = { "héllo\n", Position { line: 0, column: 2 }, "é", BytePosition { line: 0, byte: 3 }, BytePosition { line: 0, byte: 5 } },
     )]
-    fn insert_returns_the_position_past_the_text(at: Position, inserted: &str, past: Position) {
-        let mut buffer = Buffer::new("hello\nworld\n");
-        assert_eq!(buffer.insert(at, inserted), past);
+    fn insert_reports_the_change(
+        text: &str,
+        at: Position,
+        inserted: &str,
+        start: BytePosition,
+        inserted_end: BytePosition,
+    ) {
+        let mut buffer = Buffer::new(text);
+        let edit = buffer.insert(at, inserted);
+        let deleted_end = start;
+        assert_eq!(
+            edit,
+            Edit {
+                start,
+                deleted_end,
+                inserted_end
+            }
+        );
     }
 
     #[yare::parameterized(
@@ -140,5 +204,37 @@ mod tests {
         let mut buffer = Buffer::new(text);
         buffer.delete(range);
         assert_eq!(buffer.lines(), lines);
+    }
+
+    #[yare::parameterized(
+        within_a_line = { "hello\n", Position { line: 0, column: 1 }..Position { line: 0, column: 3 }, BytePosition { line: 0, byte: 1 }, BytePosition { line: 0, byte: 3 } },
+        across_lines = { "hello\nworld\n", Position { line: 0, column: 3 }..Position { line: 1, column: 2 }, BytePosition { line: 0, byte: 3 }, BytePosition { line: 1, byte: 2 } },
+        in_bytes = { "héllo\n", Position { line: 0, column: 1 }..Position { line: 0, column: 2 }, BytePosition { line: 0, byte: 1 }, BytePosition { line: 0, byte: 3 } },
+        nothing_when_the_end_is_before_the_start = { "hello\n", Position { line: 0, column: 3 }..Position { line: 0, column: 1 }, BytePosition { line: 0, byte: 3 }, BytePosition { line: 0, byte: 3 } },
+    )]
+    fn delete_reports_the_change(
+        text: &str,
+        range: Range<Position>,
+        start: BytePosition,
+        deleted_end: BytePosition,
+    ) {
+        let mut buffer = Buffer::new(text);
+        let edit = buffer.delete(range);
+        let inserted_end = start;
+        assert_eq!(
+            edit,
+            Edit {
+                start,
+                deleted_end,
+                inserted_end
+            }
+        );
+    }
+
+    #[test]
+    fn position_counts_the_characters_before_a_byte() {
+        let buffer = Buffer::new("héllo\n");
+        let at = BytePosition { line: 0, byte: 3 };
+        assert_eq!(buffer.position(at), Position { line: 0, column: 2 });
     }
 }

@@ -7,7 +7,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
-use diph_core::{Buffer, Highlighter, Line, Position, Row, RowKind, SideBySide, Span};
+use diph_core::{Buffer, Edit, Highlighter, Line, Position, Row, RowKind, SideBySide, Span};
 use eframe::egui::{
     self, Align2, Color32, CursorIcon, FontId, Galley, Key, KeyboardShortcut, Modifiers, Painter,
     Pos2, Rect, ScrollArea, Sense, Stroke, TextFormat, TextStyle, UiBuilder, epaint::text::Glyph,
@@ -364,29 +364,21 @@ impl TextView {
         }
     }
 
-    /// Edits the buffer of `side` with `edit`, which rewrites `lines` of it,
-    /// and starts highlighting the side again. Until the colors arrive, the
-    /// lines the edit wrote have none and the other lines keep theirs.
-    /// Returns what `edit` returns.
-    fn edit<R>(
-        &mut self,
-        side: usize,
-        lines: Range<usize>,
-        edit: impl FnOnce(&mut Buffer) -> R,
-    ) -> R {
-        let line_count = |view: &Self| view.diff.buffers()[side].lines().len();
-        let before = line_count(self);
-        let edited = self.diff.edit(side, edit);
-        let written = (lines.len() + line_count(self)).saturating_sub(before);
+    /// Edits the buffer of `side` with `edit` and starts highlighting the
+    /// side again. Until the colors arrive, the lines the edit wrote have
+    /// none and the other lines keep theirs. Returns the change `edit` made.
+    fn edit(&mut self, side: usize, edit: impl FnOnce(&mut Buffer) -> Edit) -> Edit {
+        let edit = self.diff.edit(side, edit);
         let colors = &mut self.colors[side].lines;
-        if lines.start < colors.len() {
-            let end = lines.end.min(colors.len());
-            colors.splice(lines.start..end, vec![Vec::new(); written]);
+        if edit.start.line < colors.len() {
+            let end = (edit.deleted_end.line + 1).min(colors.len());
+            let written = edit.inserted_end.line - edit.start.line + 1;
+            colors.splice(edit.start.line..end, vec![Vec::new(); written]);
         }
         self.highlight_runs[side].fetch_add(1, Ordering::Relaxed);
         self.colors_received[side] = 0;
         self.highlight(side);
-        edited
+        edit
     }
 
     /// Inserts `text` at the cursor and moves the cursor past it.
@@ -395,8 +387,8 @@ impl TextView {
             return;
         };
         let at = self.cursor.position(&self.diff.buffers()[side]);
-        let past = self.edit(side, at.line..at.line + 1, |b| b.insert(at, text));
-        self.move_cursor(|c, b| c.set(b, past));
+        let edit = self.edit(side, |b| b.insert(at, text));
+        self.move_cursor(|c, b| c.set(b, b.position(edit.inserted_end)));
     }
 
     /// Deletes the character before the cursor, or at the start of a line
@@ -418,7 +410,7 @@ impl TextView {
                 column: column - 1,
             },
         };
-        self.edit(side, start.line..at.line + 1, |b| b.delete(start..at));
+        self.edit(side, |b| b.delete(start..at));
         self.move_cursor(|c, b| c.set(b, start));
     }
 

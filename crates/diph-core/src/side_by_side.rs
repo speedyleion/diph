@@ -179,7 +179,7 @@ fn ranges_in(line: &str, slices: &[(ChangeTag, &str)], tag: ChangeTag) -> Vec<Ra
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Position;
+    use crate::{BytePosition, Position};
     use insta::assert_snapshot;
 
     /// Draws the rows of the diff of `left` and `right` as text: a kind
@@ -334,7 +334,7 @@ mod tests {
     fn edit_returns_what_the_edit_returns() {
         let mut diff = two_lines_deleted();
         let at = Position { line: 0, column: 1 };
-        let past = diff.edit(0, |buffer| buffer.insert(at, "!"));
-        assert_eq!(past, Position { line: 0, column: 2 });
+        let edit = diff.edit(0, |buffer| buffer.insert(at, "!"));
+        assert_eq!(edit.inserted_end, BytePosition { line: 0, byte: 2 });
     }
 }
