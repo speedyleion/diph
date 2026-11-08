@@ -75,7 +75,9 @@ enum Action {
     CharRight,
     LineDown,
     LineUp,
+    /// The line of the count, or the first line without one.
     FirstLine,
+    /// The line of the count, or the last line without one.
     LastLine,
     LineStart,
     LineEnd,
@@ -152,6 +154,7 @@ fn normal_keymap() -> Keymap<Action> {
         (vec![shift(Key::O)], Action::OpenLine(OpenLineAt::Above)),
         (vec![key(Key::O)], Action::OpenLine(OpenLineAt::Below)),
     ])
+    .with_counts()
 }
 
 fn insert_keymap() -> Keymap<Action> {
@@ -371,10 +374,10 @@ impl TextView {
                 Mode::Normal => &mut self.normal_keys,
                 Mode::Insert => &mut self.insert_keys,
             };
-            let action = keymap.press(key);
-            self.key_handled = action.is_some();
-            if let Some(action) = action {
-                self.perform(ctx, action);
+            let pressed = keymap.press(key);
+            self.key_handled = pressed.is_some();
+            if let Some((action, count)) = pressed {
+                self.perform(ctx, action, count);
             }
         } else if let egui::Event::Text(text) = event
             && self.mode == Mode::Insert
@@ -384,7 +387,10 @@ impl TextView {
         }
     }
 
-    fn perform(&mut self, ctx: &egui::Context, action: Action) {
+    /// Performs `action`, with the count typed before its keys.
+    fn perform(&mut self, ctx: &egui::Context, action: Action, count: Option<usize>) {
+        // The index of the line a count numbers from 1.
+        let counted_line = count.map(|line| line - 1);
         match action {
             Action::PrevChange => self.step_change(-1),
             Action::NextChange => self.step_change(1),
@@ -392,8 +398,12 @@ impl TextView {
             Action::CharRight => self.move_cursor(|c, b| c.move_column(b, 1)),
             Action::LineDown => self.move_cursor(|c, b| c.move_line(b, 1)),
             Action::LineUp => self.move_cursor(|c, b| c.move_line(b, -1)),
-            Action::FirstLine => self.move_cursor(|c, b| c.go_to_line(b, 0)),
-            Action::LastLine => self.move_cursor(|c, b| c.go_to_line(b, usize::MAX)),
+            Action::FirstLine => {
+                self.move_cursor(|c, b| c.go_to_line(b, counted_line.unwrap_or(0)));
+            }
+            Action::LastLine => {
+                self.move_cursor(|c, b| c.go_to_line(b, counted_line.unwrap_or(usize::MAX)));
+            }
             Action::LineStart => self.move_cursor(|c, b| c.go_to_line_start(b)),
             Action::LineEnd => self.move_cursor(|c, b| c.go_to_line_end(b)),
             Action::LeftSide => self.switch_side(0),
@@ -1033,6 +1043,12 @@ mod tests {
         ctrl_w_l_moves_to_the_right_side = { "C-w h j C-w l", 1, 1, 0 },
         another_key_cancels_a_sequence_and_is_dropped = { "j j g j g", 1, 2, 0 },
         a_new_sequence_starts_after_a_cancelled_one = { "j g j g g", 1, 0, 0 },
+        a_count_before_gg_moves_to_its_line = { "1 0 g g", 1, 9, 0 },
+        a_count_before_shift_g_moves_to_its_line = { "1 0 G", 1, 9, 0 },
+        a_count_past_the_last_line_moves_to_the_last_line = { "9 9 9 g g", 1, 199, 0 },
+        a_count_is_used_once = { "5 g g j g g", 1, 0, 0 },
+        a_cancelled_sequence_drops_its_count = { "5 g j g g", 1, 0, 0 },
+        zero_alone_is_not_a_count = { "j 0 g g", 1, 0, 0 },
     )]
     fn keys_move_the_cursor(keys: &str, side: usize, line: usize, column: usize) {
         let harness = typed_in_unchanged_file(keys);

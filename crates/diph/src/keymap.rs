@@ -1,12 +1,30 @@
 //! Key sequences, such as vim's `gg`, bound to actions.
 
-use eframe::egui::{Event, KeyboardShortcut};
+use eframe::egui::{Event, Key, KeyboardShortcut};
+
+/// The digit keys, in order from 0.
+const DIGITS: [Key; 10] = [
+    Key::Num0,
+    Key::Num1,
+    Key::Num2,
+    Key::Num3,
+    Key::Num4,
+    Key::Num5,
+    Key::Num6,
+    Key::Num7,
+    Key::Num8,
+    Key::Num9,
+];
 
 /// Actions bound to sequences of key presses, which may span several frames.
 /// A key that neither completes nor continues a sequence cancels it, along
 /// with the keys pressed before it.
 pub struct Keymap<A> {
     bindings: Vec<Binding<A>>,
+    /// Whether digits typed before a sequence give it a count.
+    counts: bool,
+    /// The count typed so far before the pending sequence.
+    count: Option<usize>,
     /// Keys pressed so far of a sequence not yet complete.
     pending: Vec<KeyboardShortcut>,
 }
@@ -38,12 +56,29 @@ impl<A: Copy> Keymap<A> {
             .collect();
         Self {
             bindings,
+            counts: false,
+            count: None,
             pending: Vec::new(),
         }
     }
 
-    /// Adds `key` to the pending sequence, returning the action it completes.
-    pub fn press(&mut self, key: KeyboardShortcut) -> Option<A> {
+    /// Lets digits typed before a sequence give it a count, as in vim's
+    /// `10gg`. A 0 adds to a count but doesn't start one.
+    pub fn with_counts(self) -> Self {
+        Self {
+            counts: true,
+            ..self
+        }
+    }
+
+    /// Adds `key` to the pending sequence, returning the action it completes
+    /// and the count typed before the sequence, which is at least 1.
+    pub fn press(&mut self, key: KeyboardShortcut) -> Option<(A, Option<usize>)> {
+        if let Some(digit) = self.count_digit(&key) {
+            let count = self.count.unwrap_or(0).saturating_mul(10);
+            self.count = Some(count.saturating_add(digit));
+            return None;
+        }
         self.pending.push(key);
         let continued: Vec<_> = self
             .bindings
@@ -56,8 +91,20 @@ impl<A: Copy> Keymap<A> {
             .map(|b| b.action);
         if completed.is_some() || continued.is_empty() {
             self.pending.clear();
+            let count = self.count.take();
+            return completed.map(|action| (action, count));
         }
-        completed
+        None
+    }
+
+    /// The digit `key` adds to the count, if it is a digit without
+    /// modifiers typed before a sequence's first key.
+    fn count_digit(&self, key: &KeyboardShortcut) -> Option<usize> {
+        if !self.counts || !self.pending.is_empty() || !key.modifiers.is_none() {
+            return None;
+        }
+        let digit = DIGITS.iter().position(|d| *d == key.logical_key)?;
+        (digit > 0 || self.count.is_some()).then_some(digit)
     }
 }
 
