@@ -12,6 +12,8 @@ now.
 - Don't mention future work, follow-up PRs, or what will come later.
 - Don't mention what the change doesn't do, or work that may not exist
   later (spikes, other branches, other PRs).
+- Don't spell out behavior the title already implies, such as what
+  typing in insert mode does. Describe what a reader wouldn't expect.
 - Don't say where an idea came from ("modelled on X") unless the reader
   needs it to understand or maintain the code.
 - Don't narrate how the PR evolved ("Also:", "after review"). Update the
@@ -20,8 +22,8 @@ now.
 
 ## Code comments, docs, and descriptions
 
-The same reader applies to code comments, the README, crate descriptions,
-and `--help` text: describe what the code does now.
+The same reader applies to code comments, the README, the changelog,
+crate descriptions, and `--help` text: describe what the code does now.
 
 - Keep descriptions to a plain summary of what the tool does. Leave out
   adjectives that don't tell the reader anything ("native") and features
@@ -35,6 +37,8 @@ and `--help` text: describe what the code does now.
   with the result.
 - Don't repeat what the signature already says, such as the return type
   or that there are two of something.
+- Don't document behavior anyone would expect, such as a typed key
+  inserting its character.
 
 ## Code
 
