@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sight, and stepping to a change moves it there.
 - Insert mode, which i and a enter before and after the cursor and Escape
   leaves.
+- Ctrl+S, or Cmd+S on macOS, saves the side with the cursor.
 
 ### Changed
 
