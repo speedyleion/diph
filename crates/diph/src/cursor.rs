@@ -57,6 +57,33 @@ impl Cursor {
         self.line = line.min(buffer.lines().len().saturating_sub(1));
     }
 
+    /// Moves to the first non-whitespace character on the current line.
+    pub fn go_to_line_start(&mut self, buffer: &Buffer) {
+        let line = &buffer.lines()[self.line];
+        let column = line
+            .chars()
+            .position(|character| !character.is_whitespace())
+            .unwrap_or(0);
+        self.set(
+            buffer,
+            Position {
+                line: self.line,
+                column,
+            },
+        );
+    }
+
+    /// Moves past the last character on the current line.
+    pub fn go_to_line_end(&mut self, buffer: &Buffer) {
+        self.set(
+            buffer,
+            Position {
+                line: self.line,
+                column: usize::MAX,
+            },
+        );
+    }
+
     /// The last column the cursor can take on its line in `buffer`.
     fn last_column(&self, buffer: &Buffer) -> usize {
         let chars = buffer

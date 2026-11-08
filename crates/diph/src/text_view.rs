@@ -77,11 +77,14 @@ enum Action {
     LineUp,
     FirstLine,
     LastLine,
+    LineStart,
+    LineEnd,
     LeftSide,
     RightSide,
     Close,
     Save,
     Insert(InsertAt),
+    OpenLine(OpenLineAt),
     NormalMode,
     NewLine,
     Tab,
@@ -95,6 +98,16 @@ enum InsertAt {
     BeforeCursor,
     /// After the character under the cursor.
     AfterCursor,
+    /// At the first non-whitespace character on the line.
+    LineStart,
+    /// After the last character on the line.
+    LineEnd,
+}
+
+#[derive(Clone, Copy)]
+enum OpenLineAt {
+    Above,
+    Below,
 }
 
 /// Which keymap keys go to, as in vim.
@@ -124,6 +137,8 @@ fn normal_keymap() -> Keymap<Action> {
         (vec![key(Key::ArrowUp)], Action::LineUp),
         (vec![key(Key::G), key(Key::G)], Action::FirstLine),
         (vec![shift(Key::G)], Action::LastLine),
+        (vec![shift(Key::Num6)], Action::LineStart),
+        (vec![shift(Key::Num4)], Action::LineEnd),
         (vec![ctrl(Key::W), key(Key::H)], Action::LeftSide),
         (vec![ctrl(Key::W), ctrl(Key::H)], Action::LeftSide),
         (vec![ctrl(Key::W), key(Key::L)], Action::RightSide),
@@ -132,6 +147,10 @@ fn normal_keymap() -> Keymap<Action> {
         (vec![command(Key::S)], Action::Save),
         (vec![key(Key::I)], Action::Insert(InsertAt::BeforeCursor)),
         (vec![key(Key::A)], Action::Insert(InsertAt::AfterCursor)),
+        (vec![shift(Key::I)], Action::Insert(InsertAt::LineStart)),
+        (vec![shift(Key::A)], Action::Insert(InsertAt::LineEnd)),
+        (vec![shift(Key::O)], Action::OpenLine(OpenLineAt::Above)),
+        (vec![key(Key::O)], Action::OpenLine(OpenLineAt::Below)),
     ])
 }
 
@@ -375,11 +394,14 @@ impl TextView {
             Action::LineUp => self.move_cursor(|c, b| c.move_line(b, -1)),
             Action::FirstLine => self.move_cursor(|c, b| c.go_to_line(b, 0)),
             Action::LastLine => self.move_cursor(|c, b| c.go_to_line(b, usize::MAX)),
+            Action::LineStart => self.move_cursor(|c, b| c.go_to_line_start(b)),
+            Action::LineEnd => self.move_cursor(|c, b| c.go_to_line_end(b)),
             Action::LeftSide => self.switch_side(0),
             Action::RightSide => self.switch_side(1),
             Action::Close => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             Action::Save => self.save(),
             Action::Insert(at) => self.insert(at),
+            Action::OpenLine(at) => self.open_line(at),
             Action::NormalMode => self.leave_insert(),
             Action::NewLine => self.type_text("\n"),
             Action::Tab => self.type_text("\t"),
@@ -447,17 +469,47 @@ impl TextView {
         self.move_cursor(|c, b| c.set(b, start));
     }
 
-    /// Switches to insert mode with the cursor between characters `at` the
-    /// cursor.
+    /// Switches to insert mode with the cursor at `at`.
     fn insert(&mut self, at: InsertAt) {
         self.mode = Mode::Insert;
-        let offset = match at {
-            InsertAt::BeforeCursor => 0,
-            InsertAt::AfterCursor => 1,
+        self.move_cursor(|c, b| match at {
+            InsertAt::BeforeCursor => {
+                c.set_between_characters(b, true);
+            }
+            InsertAt::AfterCursor => {
+                c.set_between_characters(b, true);
+                c.move_column(b, 1);
+            }
+            InsertAt::LineStart => {
+                c.go_to_line_start(b);
+                c.set_between_characters(b, true);
+            }
+            InsertAt::LineEnd => {
+                c.set_between_characters(b, true);
+                c.go_to_line_end(b);
+            }
+        });
+    }
+
+    fn open_line(&mut self, at: OpenLineAt) {
+        let Some(side) = self.cursor_side else {
+            return;
         };
+        let buffer = &self.diff.buffers()[side];
+        let current = self.cursor.position(buffer);
+        let (line, column) = match at {
+            OpenLineAt::Above => (current.line, 0),
+            OpenLineAt::Below => (current.line + 1, usize::MAX),
+        };
+        let insertion = Position {
+            line: current.line,
+            column,
+        };
+        self.edit(side, |b| b.insert(insertion, "\n"));
+        self.mode = Mode::Insert;
         self.move_cursor(|c, b| {
+            c.set(b, Position { line, column: 0 });
             c.set_between_characters(b, true);
-            c.move_column(b, offset);
         });
     }
 
@@ -952,12 +1004,17 @@ mod tests {
             Some(name) => (Modifiers::CTRL | Modifiers::COMMAND, name),
             None => (Modifiers::NONE, key),
         };
-        let shift = if name.len() == 1 && name != name.to_lowercase() {
+        let shift = if matches!(name, "$" | "^") || (name.len() == 1 && name != name.to_lowercase())
+        {
             Modifiers::SHIFT
         } else {
             Modifiers::NONE
         };
-        let key = Key::from_name(&name.to_uppercase()).or(Key::from_name(name));
+        let key = match name {
+            "$" => Some(Key::Num4),
+            "^" => Some(Key::Num6),
+            _ => Key::from_name(&name.to_uppercase()).or(Key::from_name(name)),
+        };
         (ctrl | shift, key.unwrap())
     }
 
@@ -969,6 +1026,8 @@ mod tests {
         arrows_move = { "Down Down Right Up Right Right Left", 1, 1, 2 },
         gg_moves_to_the_first_line = { "j j g g", 1, 0, 0 },
         shift_g_moves_to_the_last_line = { "G", 1, 199, 0 },
+        caret_moves_to_the_start_of_the_line = { "^", 1, 0, 0 },
+        dollar_moves_to_the_end_of_the_line = { "$", 1, 0, 5 },
         ctrl_w_h_moves_to_the_left_side = { "j l C-w h", 0, 1, 1 },
         ctrl_w_ctrl_h_moves_to_the_left_side = { "C-w C-h", 0, 0, 0 },
         ctrl_w_l_moves_to_the_right_side = { "C-w h j C-w l", 1, 1, 0 },
@@ -1112,6 +1171,8 @@ mod tests {
         i_keeps_the_cursor_on_its_column = { "l l i", 2 },
         a_moves_it_after_its_character = { "l l a", 3 },
         a_on_the_last_character_moves_past_the_end = { "l l l l l a", 6 },
+        shift_i_moves_to_the_start_of_the_line = { "l l I", 0 },
+        shift_a_moves_to_the_end_of_the_line = { "A", 6 },
         escape_moves_it_back_a_character = { "l l a Escape", 2 },
         escape_at_the_start_of_a_line_keeps_it_there = { "i Escape", 0 },
         insert_mode_arrows_reach_past_the_end = { "i Right Right Right Right Right Right Right", 6 },
@@ -1120,6 +1181,32 @@ mod tests {
         let harness = typed_in_unchanged_file(keys);
         let cursor = harness.state().cursor_position();
         assert_eq!(cursor, Some((1, Position { line: 0, column })));
+    }
+
+    #[yare::parameterized(
+        open_below = { "o x Escape", "line 0", "x" },
+        open_above = { "O x Escape", "x", "line 0" },
+    )]
+    fn opening_a_line_inserts_text_on_the_new_line(
+        keys: &str,
+        first_line: &str,
+        second_line: &str,
+    ) {
+        let harness = typed_in_unchanged_file(keys);
+        let lines = &harness.state().diff.buffers()[1].lines()[..2];
+        assert_eq!(lines, [first_line, second_line]);
+    }
+
+    #[yare::parameterized(
+        open_below = { "o x Escape", 1, 0 },
+        open_above = { "O x Escape", 0, 0 },
+    )]
+    fn opening_a_line_leaves_the_cursor_on_its_text(keys: &str, line: usize, column: usize) {
+        let harness = typed_in_unchanged_file(keys);
+        assert_eq!(
+            harness.state().cursor_position(),
+            Some((1, Position { line, column }))
+        );
     }
 
     #[yare::parameterized(
@@ -1135,6 +1222,8 @@ mod tests {
 
     #[yare::parameterized(
         insert_mode_types_at_the_cursor = { "l i x y", "lxyine 0" },
+        shift_i_types_at_the_start_of_the_line = { "l l I x", "xline 0" },
+        shift_a_types_at_the_end_of_the_line = { "A x", "line 0x" },
         the_key_entering_insert_mode_types_nothing = { "a", "line 0" },
         tab_types_a_tab = { "i Tab", "\tline 0" },
         backspace_deletes_the_character_before_the_cursor = { "l l i Backspace", "lne 0" },

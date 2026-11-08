@@ -48,6 +48,9 @@ crate descriptions, and `--help` text: describe what the code does now.
 - Use a struct with named fields, not a tuple, for data that is stored,
   sent between threads, or given a type alias. Keep tuples for values
   destructured right away, such as an iterator's pairs.
+- When related values depend on the same match or condition, compute them
+  together and destructure the result immediately instead of repeating the
+  match.
 - When a nested collection's layers mean different things, wrap a layer
   in a named type (`SideColors`, not `Vec<Vec<Span>>`).
 - Keep values that describe the same thing together in a struct, and
