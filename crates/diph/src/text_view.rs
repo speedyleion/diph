@@ -77,14 +77,20 @@ enum Action {
     LeftSide,
     RightSide,
     Close,
-    /// Insert mode before the cursor.
-    Insert,
-    /// Insert mode after the cursor.
-    Append,
+    Insert(InsertAt),
     NormalMode,
     NewLine,
     Tab,
     Backspace,
+}
+
+/// Where insert mode puts the cursor.
+#[derive(Clone, Copy)]
+enum InsertAt {
+    /// Before the character under the cursor.
+    BeforeCursor,
+    /// After the character under the cursor.
+    AfterCursor,
 }
 
 /// Which keymap keys go to, as in vim.
@@ -94,11 +100,6 @@ enum Mode {
     Insert,
 }
 
-/// In normal mode, p or Shift+F7 and n or F7 step through changes. h, j,
-/// k, and l or the arrow keys move the cursor a character or a line, gg
-/// and G move it to the first and last line, and Ctrl+W h and Ctrl+W l
-/// move it to the left and right side. i and a enter insert mode before
-/// and after the cursor. ZZ closes the window.
 fn normal_keymap() -> Keymap<Action> {
     let key = |key| KeyboardShortcut::new(Modifiers::NONE, key);
     let shift = |key| KeyboardShortcut::new(Modifiers::SHIFT, key);
@@ -123,13 +124,11 @@ fn normal_keymap() -> Keymap<Action> {
         (vec![ctrl(Key::W), key(Key::L)], Action::RightSide),
         (vec![ctrl(Key::W), ctrl(Key::L)], Action::RightSide),
         (vec![shift(Key::Z), shift(Key::Z)], Action::Close),
-        (vec![key(Key::I)], Action::Insert),
-        (vec![key(Key::A)], Action::Append),
+        (vec![key(Key::I)], Action::Insert(InsertAt::BeforeCursor)),
+        (vec![key(Key::A)], Action::Insert(InsertAt::AfterCursor)),
     ])
 }
 
-/// In insert mode, the arrow keys move the cursor, Enter, Tab, and
-/// Backspace edit the line, and Escape returns to normal mode.
 fn insert_keymap() -> Keymap<Action> {
     let key = |key| KeyboardShortcut::new(Modifiers::NONE, key);
     Keymap::new([
@@ -325,8 +324,7 @@ impl TextView {
             Action::LeftSide => self.switch_side(0),
             Action::RightSide => self.switch_side(1),
             Action::Close => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
-            Action::Insert => self.insert(0),
-            Action::Append => self.insert(1),
+            Action::Insert(at) => self.insert(at),
             Action::NormalMode => self.leave_insert(),
             Action::NewLine => self.type_text("\n"),
             Action::Tab => self.type_text("\t"),
@@ -375,12 +373,16 @@ impl TextView {
         self.move_cursor(|c, b| c.set(b, start));
     }
 
-    /// Switches to insert mode with the cursor `offset` characters right of
-    /// where it was, where it may sit just past the end of the line.
-    fn insert(&mut self, offset: isize) {
+    /// Switches to insert mode with the cursor between characters `at` the
+    /// cursor.
+    fn insert(&mut self, at: InsertAt) {
         self.mode = Mode::Insert;
+        let offset = match at {
+            InsertAt::BeforeCursor => 0,
+            InsertAt::AfterCursor => 1,
+        };
         self.move_cursor(|c, b| {
-            c.allow_past_end(b, true);
+            c.set_between_characters(b, true);
             c.move_column(b, offset);
         });
     }
@@ -391,7 +393,7 @@ impl TextView {
         self.mode = Mode::Normal;
         self.move_cursor(|c, b| {
             c.move_column(b, -1);
-            c.allow_past_end(b, false);
+            c.set_between_characters(b, false);
         });
     }
 
