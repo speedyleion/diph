@@ -1,9 +1,10 @@
 //! Side-by-side text diff view.
 
 use std::ops::Range;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use diph_core::{Buffer, Highlighter, Line, Position, Row, RowKind, SideBySide, Span};
@@ -172,7 +173,12 @@ pub struct TextView {
     colors_rx: Option<Receiver<ColorsChunk>>,
     /// The current highlighting of the left and right side. Colors from an
     /// earlier one are for text since edited, so they are dropped.
-    highlight_runs: [usize; 2],
+    highlight_runs: Arc<[AtomicUsize; 2]>,
+    /// Lines of each side's colors from its current highlighting. The
+    /// colors past them are from before the side's last edit.
+    colors_received: [usize; 2],
+    /// What highlighting a side needs, once highlighting has started.
+    highlighting: Option<Highlighting>,
     /// When diph started.
     started: Instant,
     /// Time from `started` to the first frame.
@@ -207,7 +213,9 @@ impl TextView {
             insert_keys: insert_keymap(),
             colors: Default::default(),
             colors_rx: None,
-            highlight_runs: [0; 2],
+            highlight_runs: Default::default(),
+            colors_received: [0; 2],
+            highlighting: None,
             started,
             startup_time: None,
         };
@@ -221,9 +229,26 @@ impl TextView {
     pub fn highlight_in_background(&mut self, paths: [PathBuf; 2], ctx: egui::Context) {
         let (tx, rx) = channel();
         self.colors_rx = Some(rx);
-        let sides = self.diff.buffers().each_ref().map(|b| b.lines().to_vec());
-        let runs = self.highlight_runs;
-        std::thread::spawn(move || highlight_sides(&paths, &sides, runs, &tx, &ctx));
+        self.highlighting = Some(Highlighting {
+            paths,
+            highlighter: Arc::default(),
+            runs: self.highlight_runs.clone(),
+            tx,
+            ctx,
+        });
+        self.highlight(0);
+        self.highlight(1);
+    }
+
+    /// Highlights `side` on a background thread, if highlighting has
+    /// started.
+    fn highlight(&self, side: usize) {
+        let Some(highlighting) = self.highlighting.clone() else {
+            return;
+        };
+        let run = self.highlight_runs[side].load(Ordering::Relaxed);
+        let lines = self.diff.buffers()[side].lines().to_vec();
+        std::thread::spawn(move || highlighting.highlight_side(side, run, &lines));
     }
 
     pub fn show(&mut self, ui: &mut egui::Ui) {
@@ -231,9 +256,16 @@ impl TextView {
         let startup_time = *self.startup_time.get_or_insert_with(|| started.elapsed());
         if let Some(rx) = &self.colors_rx {
             for chunk in rx.try_iter() {
-                if chunk.run == self.highlight_runs[chunk.side] {
-                    self.colors[chunk.side].lines.extend(chunk.lines);
+                let side = chunk.side;
+                if chunk.run != self.highlight_runs[side].load(Ordering::Relaxed) {
+                    continue;
                 }
+                // Replaces the colors from before the last edit.
+                let colors = &mut self.colors[side].lines;
+                let start = self.colors_received[side];
+                let end = (start + chunk.lines.len()).min(colors.len());
+                self.colors_received[side] += chunk.lines.len();
+                colors.splice(start..end, chunk.lines);
             }
         }
         // One event at a time, so a key that switches modes sends the keys
@@ -332,12 +364,29 @@ impl TextView {
         }
     }
 
-    /// Edits the buffer of `side` with `edit`, dropping the side's colors,
-    /// which were for the text before it. Returns what `edit` returns.
-    fn edit<R>(&mut self, side: usize, edit: impl FnOnce(&mut Buffer) -> R) -> R {
-        self.highlight_runs[side] += 1;
-        self.colors[side] = SideColors::default();
-        self.diff.edit(side, edit)
+    /// Edits the buffer of `side` with `edit`, which rewrites `lines` of it,
+    /// and starts highlighting the side again. Until the colors arrive, the
+    /// lines the edit wrote have none and the other lines keep theirs.
+    /// Returns what `edit` returns.
+    fn edit<R>(
+        &mut self,
+        side: usize,
+        lines: Range<usize>,
+        edit: impl FnOnce(&mut Buffer) -> R,
+    ) -> R {
+        let line_count = |view: &Self| view.diff.buffers()[side].lines().len();
+        let before = line_count(self);
+        let edited = self.diff.edit(side, edit);
+        let written = (lines.len() + line_count(self)).saturating_sub(before);
+        let colors = &mut self.colors[side].lines;
+        if lines.start < colors.len() {
+            let end = lines.end.min(colors.len());
+            colors.splice(lines.start..end, vec![Vec::new(); written]);
+        }
+        self.highlight_runs[side].fetch_add(1, Ordering::Relaxed);
+        self.colors_received[side] = 0;
+        self.highlight(side);
+        edited
     }
 
     /// Inserts `text` at the cursor and moves the cursor past it.
@@ -346,7 +395,7 @@ impl TextView {
             return;
         };
         let at = self.cursor.position(&self.diff.buffers()[side]);
-        let past = self.edit(side, |b| b.insert(at, text));
+        let past = self.edit(side, at.line..at.line + 1, |b| b.insert(at, text));
         self.move_cursor(|c, b| c.set(b, past));
     }
 
@@ -369,7 +418,7 @@ impl TextView {
                 column: column - 1,
             },
         };
-        self.edit(side, |b| b.delete(start..at));
+        self.edit(side, start.line..at.line + 1, |b| b.delete(start..at));
         self.move_cursor(|c, b| c.set(b, start));
     }
 
@@ -510,44 +559,37 @@ impl TextView {
     }
 }
 
-/// Highlights both sides at once, sending each side's colors over `tx` in
-/// chunks and requesting a repaint after each. Stops once the window has
-/// closed.
-fn highlight_sides(
-    paths: &[PathBuf; 2],
-    sides: &[Vec<String>; 2],
-    runs: [usize; 2],
-    tx: &Sender<ColorsChunk>,
-    ctx: &egui::Context,
-) {
-    let highlighter = &Highlighter::default();
-    std::thread::scope(|scope| {
-        for (side, (path, lines)) in paths.iter().zip(sides).enumerate() {
-            let run = runs[side];
-            scope.spawn(move || highlight_side(highlighter, path, lines, side, run, tx, ctx));
-        }
-    });
+/// What highlighting a side on a background thread needs.
+#[derive(Clone)]
+struct Highlighting {
+    /// The paths whose names pick the left and right side's language.
+    paths: [PathBuf; 2],
+    /// Loaded by the first highlighting to need it.
+    highlighter: Arc<OnceLock<Highlighter>>,
+    /// The current highlighting of each side.
+    runs: Arc<[AtomicUsize; 2]>,
+    tx: Sender<ColorsChunk>,
+    ctx: egui::Context,
 }
 
-/// Highlights one side's `lines`, sending them over `tx` tagged with `side`
-/// and `run`.
-fn highlight_side(
-    highlighter: &Highlighter,
-    path: &Path,
-    lines: &[String],
-    side: usize,
-    run: usize,
-    tx: &Sender<ColorsChunk>,
-    ctx: &egui::Context,
-) {
-    let mut spans = highlighter.highlight(path, lines).peekable();
-    while spans.peek().is_some() {
-        let lines = spans.by_ref().take(HIGHLIGHT_CHUNK).collect();
-        // Fails only once the window has closed.
-        if tx.send(ColorsChunk { side, run, lines }).is_err() {
-            return;
+impl Highlighting {
+    /// Highlights `side`'s `lines` as its highlighting `run`, sending the
+    /// colors in chunks and requesting a repaint after each. Stops once
+    /// the side has a later highlighting or the window has closed.
+    fn highlight_side(&self, side: usize, run: usize, lines: &[String]) {
+        let highlighter = self.highlighter.get_or_init(Highlighter::default);
+        let current = || self.runs[side].load(Ordering::Relaxed) == run;
+        let mut spans = highlighter.highlight(&self.paths[side], lines).peekable();
+        while spans.peek().is_some() && current() {
+            // Stops partway through a chunk too, once it is no longer current.
+            let chunk = spans.by_ref().take(HIGHLIGHT_CHUNK);
+            let lines = chunk.take_while(|_| current()).collect();
+            // Fails only once the window has closed.
+            if self.tx.send(ColorsChunk { side, run, lines }).is_err() {
+                return;
+            }
+            self.ctx.request_repaint();
         }
-        ctx.request_repaint();
     }
 }
 
@@ -1088,14 +1130,35 @@ mod tests {
     }
 
     #[test]
-    fn typing_drops_the_colors_of_the_side_it_edits() {
+    fn typing_drops_the_colors_of_the_lines_it_edits() {
         let mut view = unchanged_file();
-        view.colors = [0, 1].map(|_| colors_per_character(&view.diff.buffers()[0]));
+        view.colors[1] = colors_per_character(&view.diff.buffers()[1]);
         let mut harness = Harness::new_ui_state(|ui, view| view.show(ui), view);
         harness.run();
         press(&mut harness, "l i Enter");
-        let colors = &harness.state().colors;
-        assert_eq!([colors[0].lines.len(), colors[1].lines.len()], [200, 0]);
+        let lines = &harness.state().colors[1].lines;
+        // "line 0" split in two, then "line 1" with its six colors.
+        assert_eq!([lines[0].len(), lines[1].len(), lines[2].len()], [0, 0, 6]);
+    }
+
+    #[test]
+    fn highlighting_after_an_edit_replaces_the_colors_from_the_top() {
+        let mut view = unchanged_file();
+        view.colors[1] = colors_per_character(&view.diff.buffers()[1]);
+        let (tx, rx) = channel();
+        view.colors_rx = Some(rx);
+        let mut harness = Harness::new_ui_state(|ui, view| view.show(ui), view);
+        harness.run();
+        press(&mut harness, "i x");
+        tx.send(ColorsChunk {
+            side: 1,
+            run: 1,
+            lines: vec![Vec::new(); 2],
+        })
+        .unwrap();
+        harness.run();
+        let lines = &harness.state().colors[1].lines;
+        assert_eq!([lines.len(), lines[1].len(), lines[2].len()], [200, 0, 6]);
     }
 
     /// Colors for `buffer` with a span for each character, as highlighting
