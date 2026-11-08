@@ -292,10 +292,17 @@ impl TextView {
 
         egui::Panel::top("text_header").show(ui, |ui| {
             ui.horizontal(|ui| {
-                if ui.button("Prev").on_hover_text("p / Shift+F7").clicked() {
+                // Without keyboard focus, which Tab would give and Space or
+                // Enter would press with, since keys go to the keymaps.
+                let button = |text| egui::Button::new(text).sense(Sense::CLICK);
+                if ui
+                    .add(button("Prev"))
+                    .on_hover_text("p / Shift+F7")
+                    .clicked()
+                {
                     self.step_change(-1);
                 }
-                if ui.button("Next").on_hover_text("n / F7").clicked() {
+                if ui.add(button("Next")).on_hover_text("n / F7").clicked() {
                     self.step_change(1);
                 }
                 let current = self
@@ -703,7 +710,7 @@ impl RowLayout {
         cursor: Option<(usize, Position)>,
     ) -> Option<(usize, Position)> {
         let size = vec2(ui.available_width(), self.row_height);
-        let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+        let (rect, response) = ui.allocate_exact_size(size, Sense::CLICK);
         let response = response.on_hover_cursor(CursorIcon::Text);
         let click = response
             .interact_pointer_pos()
@@ -1133,6 +1140,7 @@ mod tests {
         past_typed_text = { "i x y", 0, 2 },
         to_the_start_of_the_line_enter_makes = { "l l i Enter", 1, 0 },
         to_where_backspace_joined_the_lines = { "j i Backspace", 0, 6 },
+        to_the_line_enter_makes_after_a_tab = { "i Tab Enter", 1, 0 },
     )]
     fn typing_moves_the_cursor(keys: &str, line: usize, column: usize) {
         let harness = typed_in_unchanged_file(keys);
