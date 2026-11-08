@@ -58,6 +58,8 @@ const HIGHLIGHT_CHUNK: usize = 1000;
 struct ColorsChunk {
     /// 0 for the left side, 1 for the right.
     side: usize,
+    /// Which highlighting of the side the colors come from.
+    run: usize,
     lines: Vec<Vec<Span>>,
 }
 
@@ -77,6 +79,9 @@ enum Action {
     Close,
     Insert(InsertAt),
     NormalMode,
+    NewLine,
+    Tab,
+    Backspace,
 }
 
 /// Where insert mode puts the cursor.
@@ -132,6 +137,9 @@ fn insert_keymap() -> Keymap<Action> {
         (vec![key(Key::ArrowDown)], Action::LineDown),
         (vec![key(Key::ArrowUp)], Action::LineUp),
         (vec![key(Key::Escape)], Action::NormalMode),
+        (vec![key(Key::Enter)], Action::NewLine),
+        (vec![key(Key::Tab)], Action::Tab),
+        (vec![key(Key::Backspace)], Action::Backspace),
     ])
 }
 
@@ -153,12 +161,18 @@ pub struct TextView {
     /// The cursor in the buffer of `cursor_side`.
     cursor: Cursor,
     mode: Mode,
+    /// Whether the last key pressed was bound to an action, so the text it
+    /// typed is not inserted.
+    key_handled: bool,
     normal_keys: Keymap<Action>,
     insert_keys: Keymap<Action>,
     /// Syntax colors of the left and right side, filled in from the top as
     /// the background highlighter delivers them.
     colors: [SideColors; 2],
     colors_rx: Option<Receiver<ColorsChunk>>,
+    /// The current highlighting of the left and right side. Colors from an
+    /// earlier one are for text since edited, so they are dropped.
+    highlight_runs: [usize; 2],
     /// When diph started.
     started: Instant,
     /// Time from `started` to the first frame.
@@ -188,10 +202,12 @@ impl TextView {
             top_row: 0,
             rows_in_view: 0,
             mode: Mode::Normal,
+            key_handled: false,
             normal_keys: normal_keymap(),
             insert_keys: insert_keymap(),
             colors: Default::default(),
             colors_rx: None,
+            highlight_runs: [0; 2],
             started,
             startup_time: None,
         };
@@ -206,7 +222,8 @@ impl TextView {
         let (tx, rx) = channel();
         self.colors_rx = Some(rx);
         let sides = self.diff.buffers().each_ref().map(|b| b.lines().to_vec());
-        std::thread::spawn(move || highlight_sides(&paths, &sides, &tx, &ctx));
+        let runs = self.highlight_runs;
+        std::thread::spawn(move || highlight_sides(&paths, &sides, runs, &tx, &ctx));
     }
 
     pub fn show(&mut self, ui: &mut egui::Ui) {
@@ -214,20 +231,16 @@ impl TextView {
         let startup_time = *self.startup_time.get_or_insert_with(|| started.elapsed());
         if let Some(rx) = &self.colors_rx {
             for chunk in rx.try_iter() {
-                self.colors[chunk.side].lines.extend(chunk.lines);
+                if chunk.run == self.highlight_runs[chunk.side] {
+                    self.colors[chunk.side].lines.extend(chunk.lines);
+                }
             }
         }
-        // One key at a time, so a key that switches modes sends the keys
-        // after it to the other mode's keymap.
+        // One event at a time, so a key that switches modes sends the keys
+        // and text after it to the other mode.
         let events = ui.input(|i| i.events.clone());
-        for key in events.iter().filter_map(pressed_key) {
-            let keymap = match self.mode {
-                Mode::Normal => &mut self.normal_keys,
-                Mode::Insert => &mut self.insert_keys,
-            };
-            if let Some(action) = keymap.press(key) {
-                self.perform(ui.ctx(), action);
-            }
+        for event in &events {
+            self.handle(ui.ctx(), event);
         }
 
         egui::Panel::top("text_header").show(ui, |ui| {
@@ -277,6 +290,27 @@ impl TextView {
         painter.rect_filled(cover, 0.0, IN_VIEW_COVER);
     }
 
+    /// Performs the action of a pressed key, or in insert mode inserts typed
+    /// text that a bound key did not type.
+    fn handle(&mut self, ctx: &egui::Context, event: &egui::Event) {
+        if let Some(key) = pressed_key(event) {
+            let keymap = match self.mode {
+                Mode::Normal => &mut self.normal_keys,
+                Mode::Insert => &mut self.insert_keys,
+            };
+            let action = keymap.press(key);
+            self.key_handled = action.is_some();
+            if let Some(action) = action {
+                self.perform(ctx, action);
+            }
+        } else if let egui::Event::Text(text) = event
+            && self.mode == Mode::Insert
+            && !std::mem::take(&mut self.key_handled)
+        {
+            self.type_text(text);
+        }
+    }
+
     fn perform(&mut self, ctx: &egui::Context, action: Action) {
         match action {
             Action::PrevChange => self.step_change(-1),
@@ -292,7 +326,51 @@ impl TextView {
             Action::Close => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             Action::Insert(at) => self.insert(at),
             Action::NormalMode => self.leave_insert(),
+            Action::NewLine => self.type_text("\n"),
+            Action::Tab => self.type_text("\t"),
+            Action::Backspace => self.backspace(),
         }
+    }
+
+    /// Edits the buffer of `side` with `edit`, dropping the side's colors,
+    /// which were for the text before it. Returns what `edit` returns.
+    fn edit<R>(&mut self, side: usize, edit: impl FnOnce(&mut Buffer) -> R) -> R {
+        self.highlight_runs[side] += 1;
+        self.colors[side] = SideColors::default();
+        self.diff.edit(side, edit)
+    }
+
+    /// Inserts `text` at the cursor and moves the cursor past it.
+    fn type_text(&mut self, text: &str) {
+        let Some(side) = self.cursor_side else {
+            return;
+        };
+        let at = self.cursor.position(&self.diff.buffers()[side]);
+        let past = self.edit(side, |b| b.insert(at, text));
+        self.move_cursor(|c, b| c.set(b, past));
+    }
+
+    /// Deletes the character before the cursor, or at the start of a line
+    /// joins it to the line above, and moves the cursor back.
+    fn backspace(&mut self) {
+        let Some(side) = self.cursor_side else {
+            return;
+        };
+        let buffer = &self.diff.buffers()[side];
+        let at = self.cursor.position(buffer);
+        let start = match (at.line, at.column) {
+            (0, 0) => return,
+            (line, 0) => Position {
+                line: line - 1,
+                column: buffer.lines()[line - 1].chars().count(),
+            },
+            (line, column) => Position {
+                line,
+                column: column - 1,
+            },
+        };
+        self.edit(side, |b| b.delete(start..at));
+        self.move_cursor(|c, b| c.set(b, start));
     }
 
     /// Switches to insert mode with the cursor between characters `at` the
@@ -438,23 +516,27 @@ impl TextView {
 fn highlight_sides(
     paths: &[PathBuf; 2],
     sides: &[Vec<String>; 2],
+    runs: [usize; 2],
     tx: &Sender<ColorsChunk>,
     ctx: &egui::Context,
 ) {
     let highlighter = &Highlighter::default();
     std::thread::scope(|scope| {
         for (side, (path, lines)) in paths.iter().zip(sides).enumerate() {
-            scope.spawn(move || highlight_side(highlighter, path, lines, side, tx, ctx));
+            let run = runs[side];
+            scope.spawn(move || highlight_side(highlighter, path, lines, side, run, tx, ctx));
         }
     });
 }
 
-/// Highlights one side's `lines`, sending them over `tx` tagged with `side`.
+/// Highlights one side's `lines`, sending them over `tx` tagged with `side`
+/// and `run`.
 fn highlight_side(
     highlighter: &Highlighter,
     path: &Path,
     lines: &[String],
     side: usize,
+    run: usize,
     tx: &Sender<ColorsChunk>,
     ctx: &egui::Context,
 ) {
@@ -462,7 +544,7 @@ fn highlight_side(
     while spans.peek().is_some() {
         let lines = spans.by_ref().take(HIGHLIGHT_CHUNK).collect();
         // Fails only once the window has closed.
-        if tx.send(ColorsChunk { side, lines }).is_err() {
+        if tx.send(ColorsChunk { side, run, lines }).is_err() {
             return;
         }
         ctx.request_repaint();
@@ -765,17 +847,30 @@ mod tests {
     /// `keys` are separated by spaces, each a character, uppercase with
     /// Shift, a key name such as `Down`, or either with `C-` for Ctrl.
     fn typed_in_unchanged_file(keys: &str) -> Harness<'static, TextView> {
+        let mut harness = Harness::new_ui_state(|ui, view| view.show(ui), unchanged_file());
+        harness.run();
+        press(&mut harness, keys);
+        harness
+    }
+
+    /// A view of 200 equal lines, "line 0" to "line 199".
+    fn unchanged_file() -> TextView {
         let text: String = (0..200).map(|i| format!("line {i}\n")).collect();
         let diff = SideBySide::new([Buffer::new(&text), Buffer::new(&text)]);
-        let view = TextView::new(diff, "left".into(), "right".into(), Instant::now());
-        let mut harness = Harness::new_ui_state(|ui, view| view.show(ui), view);
-        harness.run();
+        TextView::new(diff, "left".into(), "right".into(), Instant::now())
+    }
+
+    /// Presses `keys`, in [`typed_in_unchanged_file`]'s notation, one per
+    /// frame.
+    fn press(harness: &mut Harness<'static, TextView>, keys: &str) {
         for key in keys.split_whitespace() {
-            let (modifiers, key) = key_press(key);
-            harness.key_press_modifiers(modifiers, key);
+            let (modifiers, pressed) = key_press(key);
+            harness.key_press_modifiers(modifiers, pressed);
+            if key.chars().count() == 1 {
+                harness.event(egui::Event::Text(key.to_owned()));
+            }
             harness.run();
         }
-        harness
     }
 
     /// The modifiers and key of one key in [`typed_in_unchanged_file`]'s
@@ -942,7 +1037,6 @@ mod tests {
         escape_moves_it_back_a_character = { "l l a Escape", 2 },
         escape_at_the_start_of_a_line_keeps_it_there = { "i Escape", 0 },
         insert_mode_arrows_reach_past_the_end = { "i Right Right Right Right Right Right Right", 6 },
-        insert_mode_ignores_normal_mode_keys = { "i l l", 0 },
     )]
     fn mode_keys_move_the_cursor(keys: &str, column: usize) {
         let harness = typed_in_unchanged_file(keys);
@@ -959,5 +1053,83 @@ mod tests {
     fn the_status_bar_shows_insert_mode(keys: &str, shown: bool) {
         let harness = typed_in_unchanged_file(keys);
         assert_eq!(harness.query_by_label("-- INSERT --").is_some(), shown);
+    }
+
+    #[yare::parameterized(
+        insert_mode_types_at_the_cursor = { "l i x y", "lxyine 0" },
+        the_key_entering_insert_mode_types_nothing = { "a", "line 0" },
+        tab_types_a_tab = { "i Tab", "\tline 0" },
+        backspace_deletes_the_character_before_the_cursor = { "l l i Backspace", "lne 0" },
+        backspace_at_the_start_of_a_line_joins_it_to_the_one_above = { "j i Backspace", "line 0line 1" },
+        enter_ends_the_line_at_the_cursor = { "l l i Enter", "li" },
+        normal_mode_types_nothing = { "x", "line 0" },
+        escape_stops_typing = { "i Escape x", "line 0" },
+    )]
+    fn typing_edits_the_first_line(keys: &str, first_line: &str) {
+        let harness = typed_in_unchanged_file(keys);
+        assert_eq!(harness.state().diff.buffers()[1].lines()[0], first_line);
+    }
+
+    #[yare::parameterized(
+        past_typed_text = { "i x y", 0, 2 },
+        to_the_start_of_the_line_enter_makes = { "l l i Enter", 1, 0 },
+        to_where_backspace_joined_the_lines = { "j i Backspace", 0, 6 },
+    )]
+    fn typing_moves_the_cursor(keys: &str, line: usize, column: usize) {
+        let harness = typed_in_unchanged_file(keys);
+        let cursor = harness.state().cursor_position();
+        assert_eq!(cursor, Some((1, Position { line, column })));
+    }
+
+    #[test]
+    fn typing_shows_the_change_it_makes() {
+        let harness = typed_in_unchanged_file("i x");
+        harness.get_by_label("change – of 1");
+    }
+
+    #[test]
+    fn typing_drops_the_colors_of_the_side_it_edits() {
+        let mut view = unchanged_file();
+        view.colors = [0, 1].map(|_| colors_per_character(&view.diff.buffers()[0]));
+        let mut harness = Harness::new_ui_state(|ui, view| view.show(ui), view);
+        harness.run();
+        press(&mut harness, "l i Enter");
+        let colors = &harness.state().colors;
+        assert_eq!([colors[0].lines.len(), colors[1].lines.len()], [200, 0]);
+    }
+
+    /// Colors for `buffer` with a span for each character, as highlighting
+    /// can leave them.
+    fn colors_per_character(buffer: &Buffer) -> SideColors {
+        let line_colors = |line: &String| {
+            (0..line.len())
+                .map(|c| Span {
+                    range: c..c + 1,
+                    rgb: [9; 3],
+                })
+                .collect()
+        };
+        SideColors {
+            lines: buffer.lines().iter().map(line_colors).collect(),
+        }
+    }
+
+    #[test]
+    fn colors_for_text_before_an_edit_are_dropped() {
+        let mut view = unchanged_file();
+        let (tx, rx) = channel();
+        view.colors_rx = Some(rx);
+        let mut harness = Harness::new_ui_state(|ui, view| view.show(ui), view);
+        harness.run();
+        press(&mut harness, "i x");
+        let lines = vec![Vec::new(); 200];
+        tx.send(ColorsChunk {
+            side: 1,
+            run: 0,
+            lines,
+        })
+        .unwrap();
+        harness.run();
+        assert!(harness.state().colors[1].lines.is_empty());
     }
 }

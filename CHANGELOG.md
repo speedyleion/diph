@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   character or a line, gg and G to the first and last line, and Ctrl+W h
   and Ctrl+W l to the left and right side. The view scrolls to keep it in
   sight, and stepping to a change moves it there.
+- Insert mode, which i and a enter before and after the cursor and Escape
+  leaves.
 
 ### Changed
 
