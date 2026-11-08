@@ -11,7 +11,7 @@ use clap::{CommandFactory as _, Parser, error::ErrorKind};
 use diph_core::{Buffer, SideBySide};
 use eframe::egui;
 
-use text_view::TextView;
+use text_view::{SideFile, TextView};
 
 /// A side-by-side diff tool.
 ///
@@ -147,12 +147,15 @@ fn main() -> anyhow::Result<()> {
     // Non-UTF-8 text shows U+FFFD in place of the bytes it can't decode.
     let buffer = |bytes| Buffer::new(&String::from_utf8_lossy(bytes));
     let diff = SideBySide::new([buffer(&left), buffer(&right)]);
-    let (left_label, right_label) = (
-        shown(&args.left, args.label(0)),
-        shown(&args.right, args.label(1)),
-    );
-    let files = [save_file(&args.left, &left), save_file(&args.right, &right)];
-    let mut view = TextView::new(diff, left_label, right_label, files, started);
+    let left_file = SideFile {
+        label: shown(&args.left, args.label(0)),
+        save_path: save_file(&args.left, &left),
+    };
+    let right_file = SideFile {
+        label: shown(&args.right, args.label(1)),
+        save_path: save_file(&args.right, &right),
+    };
+    let mut view = TextView::new(diff, left_file, right_file, started);
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_inner_size([1400.0, 900.0]),

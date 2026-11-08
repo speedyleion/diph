@@ -151,13 +151,18 @@ fn insert_keymap() -> Keymap<Action> {
     ])
 }
 
+/// The file of one side of the diff.
+pub struct SideFile {
+    /// The name shown above the side.
+    pub label: String,
+    /// Where the side saves to; none when it can't be saved.
+    pub save_path: Option<PathBuf>,
+}
+
 pub struct TextView {
     diff: SideBySide,
-    left_label: String,
-    right_label: String,
-    /// The file the left and right side save to; none for a side that
-    /// can't be saved.
-    files: [Option<PathBuf>; 2],
+    /// The file of the left and right side.
+    files: [SideFile; 2],
     /// What the last save did, shown in the status bar.
     save_message: Option<String>,
     /// Index into `diff.changes()` of the change last jumped to.
@@ -198,15 +203,9 @@ pub struct TextView {
 }
 
 impl TextView {
-    /// A view of `diff` whose sides save to `files` and whose status bar
-    /// shows the time from `started` to the first frame.
-    pub fn new(
-        diff: SideBySide,
-        left_label: String,
-        right_label: String,
-        files: [Option<PathBuf>; 2],
-        started: Instant,
-    ) -> Self {
+    /// A view of `diff` whose status bar shows the time from `started` to
+    /// the first frame.
+    pub fn new(diff: SideBySide, left: SideFile, right: SideFile, started: Instant) -> Self {
         let buffers = diff.buffers();
         // The right side, unless only the left has lines.
         let cursor_side = [1, 0].into_iter().find(|&s| !buffers[s].lines().is_empty());
@@ -214,9 +213,7 @@ impl TextView {
             cursor_side,
             cursor: Cursor::default(),
             diff,
-            left_label,
-            right_label,
-            files,
+            files: [left, right],
             save_message: None,
             current_change: None,
             scroll_to_top_row: None,
@@ -311,8 +308,8 @@ impl TextView {
                 ui.label(format!("change {current} of {}", self.diff.changes().len()));
             });
             ui.columns(2, |cols| {
-                cols[0].monospace(&self.left_label);
-                cols[1].monospace(&self.right_label);
+                cols[0].monospace(&self.files[0].label);
+                cols[1].monospace(&self.files[1].label);
             });
         });
         egui::Panel::bottom("status_bar").show(ui, |ui| {
@@ -407,8 +404,8 @@ impl TextView {
         let Some(side) = self.cursor_side else {
             return;
         };
-        let label = [&self.left_label, &self.right_label][side];
-        self.save_message = Some(match &self.files[side] {
+        let SideFile { label, save_path } = &self.files[side];
+        self.save_message = Some(match save_path {
             None => format!("{label} can't be saved"),
             Some(file) => match std::fs::write(file, self.diff.buffers()[side].text()) {
                 Ok(()) => format!("saved {}", file.display()),
@@ -873,9 +870,14 @@ mod tests {
             .replace("line 25\n", "line twenty-five\n");
         TextView::new(
             SideBySide::new([Buffer::new(&left), Buffer::new(&right)]),
-            "left".into(),
-            "right".into(),
-            Default::default(),
+            SideFile {
+                label: "left".into(),
+                save_path: None,
+            },
+            SideFile {
+                label: "right".into(),
+                save_path: None,
+            },
             Instant::now(),
         )
     }
@@ -917,9 +919,14 @@ mod tests {
         let diff = SideBySide::new([Buffer::new(&text), Buffer::new(&text)]);
         TextView::new(
             diff,
-            "left".into(),
-            "right".into(),
-            Default::default(),
+            SideFile {
+                label: "left".into(),
+                save_path: None,
+            },
+            SideFile {
+                label: "right".into(),
+                save_path: None,
+            },
             Instant::now(),
         )
     }
@@ -1029,9 +1036,14 @@ mod tests {
         let buffers = [Buffer::new(left), Buffer::new(right)];
         let view = TextView::new(
             SideBySide::new(buffers),
-            "left".into(),
-            "right".into(),
-            Default::default(),
+            SideFile {
+                label: "left".into(),
+                save_path: None,
+            },
+            SideFile {
+                label: "right".into(),
+                save_path: None,
+            },
             Instant::now(),
         );
         assert_eq!(view.cursor_side, side);
@@ -1229,7 +1241,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("right.txt");
         let mut view = unchanged_file();
-        view.files[1] = Some(file.clone());
+        view.files[1].save_path = Some(file.clone());
         let mut harness = Harness::new_ui_state(|ui, view| view.show(ui), view);
         harness.run();
         press(&mut harness, keys);
@@ -1245,7 +1257,7 @@ mod tests {
     fn the_status_bar_shows_what_saving_did(file: Option<&str>, message: &str) {
         let dir = tempfile::tempdir().unwrap();
         let mut view = unchanged_file();
-        view.files[1] = file.map(|f| dir.path().join(f));
+        view.files[1].save_path = file.map(|f| dir.path().join(f));
         let mut harness = Harness::new_ui_state(|ui, view| view.show(ui), view);
         harness.run();
         press(&mut harness, "C-s");
