@@ -80,6 +80,7 @@ enum Action {
     LeftSide,
     RightSide,
     Close,
+    Save,
     Insert(InsertAt),
     NormalMode,
     NewLine,
@@ -107,6 +108,7 @@ fn normal_keymap() -> Keymap<Action> {
     let key = |key| KeyboardShortcut::new(Modifiers::NONE, key);
     let shift = |key| KeyboardShortcut::new(Modifiers::SHIFT, key);
     let ctrl = |key| KeyboardShortcut::new(Modifiers::CTRL, key);
+    let command = |key| KeyboardShortcut::new(Modifiers::COMMAND, key);
     Keymap::new([
         (vec![key(Key::P)], Action::PrevChange),
         (vec![shift(Key::F7)], Action::PrevChange),
@@ -127,6 +129,7 @@ fn normal_keymap() -> Keymap<Action> {
         (vec![ctrl(Key::W), key(Key::L)], Action::RightSide),
         (vec![ctrl(Key::W), ctrl(Key::L)], Action::RightSide),
         (vec![shift(Key::Z), shift(Key::Z)], Action::Close),
+        (vec![command(Key::S)], Action::Save),
         (vec![key(Key::I)], Action::Insert(InsertAt::BeforeCursor)),
         (vec![key(Key::A)], Action::Insert(InsertAt::AfterCursor)),
     ])
@@ -134,6 +137,7 @@ fn normal_keymap() -> Keymap<Action> {
 
 fn insert_keymap() -> Keymap<Action> {
     let key = |key| KeyboardShortcut::new(Modifiers::NONE, key);
+    let command = |key| KeyboardShortcut::new(Modifiers::COMMAND, key);
     Keymap::new([
         (vec![key(Key::ArrowLeft)], Action::CharLeft),
         (vec![key(Key::ArrowRight)], Action::CharRight),
@@ -143,6 +147,7 @@ fn insert_keymap() -> Keymap<Action> {
         (vec![key(Key::Enter)], Action::NewLine),
         (vec![key(Key::Tab)], Action::Tab),
         (vec![key(Key::Backspace)], Action::Backspace),
+        (vec![command(Key::S)], Action::Save),
     ])
 }
 
@@ -150,6 +155,11 @@ pub struct TextView {
     diff: SideBySide,
     left_label: String,
     right_label: String,
+    /// The file the left and right side save to; none for a side that
+    /// can't be saved.
+    files: [Option<PathBuf>; 2],
+    /// What the last save did, shown in the status bar.
+    save_message: Option<String>,
     /// Index into `diff.changes()` of the change last jumped to.
     current_change: Option<usize>,
     /// Row to scroll to the top of the view on the next frame.
@@ -188,12 +198,13 @@ pub struct TextView {
 }
 
 impl TextView {
-    /// A view of `diff` whose status bar shows the time from `started` to
-    /// the first frame.
+    /// A view of `diff` whose sides save to `files` and whose status bar
+    /// shows the time from `started` to the first frame.
     pub fn new(
         diff: SideBySide,
         left_label: String,
         right_label: String,
+        files: [Option<PathBuf>; 2],
         started: Instant,
     ) -> Self {
         let buffers = diff.buffers();
@@ -205,6 +216,8 @@ impl TextView {
             diff,
             left_label,
             right_label,
+            files,
+            save_message: None,
             current_change: None,
             scroll_to_top_row: None,
             top_row: 0,
@@ -300,6 +313,9 @@ impl TextView {
                 if self.mode == Mode::Insert {
                     ui.strong("-- INSERT --");
                 }
+                if let Some(message) = &self.save_message {
+                    ui.label(message);
+                }
                 ui.weak(format!("started in {} ms", startup_time.as_millis()));
             });
         });
@@ -358,6 +374,7 @@ impl TextView {
             Action::LeftSide => self.switch_side(0),
             Action::RightSide => self.switch_side(1),
             Action::Close => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+            Action::Save => self.save(),
             Action::Insert(at) => self.insert(at),
             Action::NormalMode => self.leave_insert(),
             Action::NewLine => self.type_text("\n"),
@@ -376,6 +393,21 @@ impl TextView {
         self.colors_received[side] = 0;
         self.highlight(side);
         edit
+    }
+
+    /// Writes the text of the side with the cursor to its file.
+    fn save(&mut self) {
+        let Some(side) = self.cursor_side else {
+            return;
+        };
+        let label = [&self.left_label, &self.right_label][side];
+        self.save_message = Some(match &self.files[side] {
+            None => format!("{label} can't be saved"),
+            Some(file) => match std::fs::write(file, self.diff.buffers()[side].text()) {
+                Ok(()) => format!("saved {}", file.display()),
+                Err(e) => format!("couldn't save {}: {e}", file.display()),
+            },
+        });
     }
 
     /// Inserts `text` at the cursor and moves the cursor past it.
@@ -836,6 +868,7 @@ mod tests {
             SideBySide::new([Buffer::new(&left), Buffer::new(&right)]),
             "left".into(),
             "right".into(),
+            Default::default(),
             Instant::now(),
         )
     }
@@ -875,7 +908,13 @@ mod tests {
     fn unchanged_file() -> TextView {
         let text: String = (0..200).map(|i| format!("line {i}\n")).collect();
         let diff = SideBySide::new([Buffer::new(&text), Buffer::new(&text)]);
-        TextView::new(diff, "left".into(), "right".into(), Instant::now())
+        TextView::new(
+            diff,
+            "left".into(),
+            "right".into(),
+            Default::default(),
+            Instant::now(),
+        )
     }
 
     /// Presses `keys`, in [`typed_in_unchanged_file`]'s notation, one per
@@ -895,7 +934,8 @@ mod tests {
     /// notation.
     fn key_press(key: &str) -> (Modifiers, Key) {
         let (ctrl, name) = match key.strip_prefix("C-") {
-            Some(name) => (Modifiers::CTRL, name),
+            // Ctrl is also the command key outside macOS.
+            Some(name) => (Modifiers::CTRL | Modifiers::COMMAND, name),
             None => (Modifiers::NONE, key),
         };
         let shift = if name.len() == 1 && name != name.to_lowercase() {
@@ -984,6 +1024,7 @@ mod tests {
             SideBySide::new(buffers),
             "left".into(),
             "right".into(),
+            Default::default(),
             Instant::now(),
         );
         assert_eq!(view.cursor_side, side);
@@ -1170,5 +1211,36 @@ mod tests {
         .unwrap();
         harness.run();
         assert!(harness.state().colors[1].lines.is_empty());
+    }
+
+    #[yare::parameterized(
+        in_normal_mode = { "i x Escape C-s" },
+        in_insert_mode = { "i x C-s" },
+    )]
+    fn ctrl_s_saves_the_side_with_the_cursor(keys: &str) {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("right.txt");
+        let mut view = unchanged_file();
+        view.files[1] = Some(file.clone());
+        let mut harness = Harness::new_ui_state(|ui, view| view.show(ui), view);
+        harness.run();
+        press(&mut harness, keys);
+        let lines: String = (0..200).map(|i| format!("line {i}\n")).collect();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), format!("x{lines}"));
+    }
+
+    #[yare::parameterized(
+        a_save = { Some("right.txt"), "saved " },
+        a_side_without_a_file = { None, "right can't be saved" },
+        a_failed_save = { Some("missing/right.txt"), "couldn't save " },
+    )]
+    fn the_status_bar_shows_what_saving_did(file: Option<&str>, message: &str) {
+        let dir = tempfile::tempdir().unwrap();
+        let mut view = unchanged_file();
+        view.files[1] = file.map(|f| dir.path().join(f));
+        let mut harness = Harness::new_ui_state(|ui, view| view.show(ui), view);
+        harness.run();
+        press(&mut harness, "C-s");
+        harness.get_by_label_contains(message);
     }
 }

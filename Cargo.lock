@@ -868,6 +868,7 @@ dependencies = [
  "eframe",
  "egui_kittest",
  "itertools",
+ "tempfile",
  "yare",
 ]
 

@@ -120,6 +120,14 @@ fn diff_name([left, right]: &[PathBuf; 2]) -> String {
     }
 }
 
+/// The file a side read from `path` as `bytes` saves to: none for
+/// `/dev/null`, or for text that isn't UTF-8, whose undecodable bytes saving
+/// would replace.
+fn save_file(path: &Path, bytes: &[u8]) -> Option<PathBuf> {
+    let saveable = !is_null(path) && std::str::from_utf8(bytes).is_ok();
+    saveable.then(|| path.to_path_buf())
+}
+
 /// Git's test: a NUL byte in the first 8000 bytes means binary.
 fn is_binary(bytes: &[u8]) -> bool {
     bytes.iter().take(8000).any(|&b| b == 0)
@@ -143,7 +151,8 @@ fn main() -> anyhow::Result<()> {
         shown(&args.left, args.label(0)),
         shown(&args.right, args.label(1)),
     );
-    let mut view = TextView::new(diff, left_label, right_label, started);
+    let files = [save_file(&args.left, &left), save_file(&args.right, &right)];
+    let mut view = TextView::new(diff, left_label, right_label, files, started);
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_inner_size([1400.0, 900.0]),
@@ -214,5 +223,15 @@ mod tests {
     )]
     fn is_binary(bytes: Vec<u8>, binary: bool) {
         assert_eq!(super::is_binary(&bytes), binary);
+    }
+
+    #[yare::parameterized(
+        a_file = { "a.txt", b"text\n", true },
+        dev_null = { "/dev/null", b"", false },
+        a_file_that_is_not_utf_8 = { "a.txt", b"caf\xe9\n", false },
+    )]
+    fn save_file(path: &str, bytes: &[u8], saveable: bool) {
+        let file = super::save_file(Path::new(path), bytes);
+        assert_eq!(file.is_some(), saveable);
     }
 }
