@@ -1,5 +1,7 @@
 mod cursor;
 mod keymap;
+mod menu;
+mod palette;
 mod text_view;
 
 use std::ffi::OsString;
@@ -8,10 +10,14 @@ use std::time::Instant;
 
 use anyhow::Context as _;
 use clap::{CommandFactory as _, Parser, error::ErrorKind};
-use diph_core::{Buffer, SideBySide};
+use diph_core::{Buffer, SideBySide, Theme};
 use eframe::egui;
 
+use menu::MenuBar;
 use text_view::{SideFile, TextView};
+
+/// The key the name of the picked theme is saved under between runs.
+const THEME_KEY: &str = "theme";
 
 /// A side-by-side diff tool.
 ///
@@ -77,9 +83,23 @@ fn is_null(path: &Path) -> bool {
     path == Path::new("/dev/null")
 }
 
-impl eframe::App for TextView {
+struct App {
+    view: TextView,
+    menu: MenuBar,
+}
+
+impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        self.show(ui);
+        let current = self.view.theme().name();
+        let picked = self.menu.show(ui, current);
+        if let Some(theme) = picked.filter(|&p| p != current).and_then(Theme::named) {
+            self.view.set_theme(ui.ctx(), theme);
+        }
+        self.view.show(ui);
+    }
+
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        storage.set_string(THEME_KEY, self.view.theme().name().to_owned());
     }
 }
 
@@ -167,10 +187,15 @@ fn main() -> anyhow::Result<()> {
         Box::new(move |cc| {
             cc.egui_ctx
                 .send_viewport_cmd(egui::ViewportCommand::Title(format!("{name} — diph")));
-            // The diff colors are picked for a dark background.
-            cc.egui_ctx.set_theme(egui::Theme::Dark);
+            let theme = cc
+                .storage
+                .and_then(|storage| storage.get_string(THEME_KEY))
+                .and_then(|name| Theme::named(&name))
+                .unwrap_or_default();
+            let menu = MenuBar::new(&cc.egui_ctx, theme.name());
+            view.set_theme(&cc.egui_ctx, theme);
             view.highlight_in_background(paths, cc.egui_ctx.clone());
-            Ok(Box::new(view))
+            Ok(Box::new(App { view, menu }))
         }),
     )
     .map_err(|e| anyhow::anyhow!("{e}"))

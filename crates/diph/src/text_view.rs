@@ -8,7 +8,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use diph_core::{
-    Buffer, Edit, Highlighter, Line, Position, Row, RowKind, SideBySide, SideColors, Span,
+    Buffer, Edit, Highlighter, Line, Position, Row, RowKind, SideBySide, SideColors, Span, Theme,
 };
 use eframe::egui::{
     self, Align2, Color32, CursorIcon, FontId, Galley, Key, KeyboardShortcut, Modifiers, Painter,
@@ -22,29 +22,10 @@ use itertools::{
 
 use crate::cursor::Cursor;
 use crate::keymap::{Keymap, pressed_key};
+use crate::palette::{CHANGED_MARK, ONE_SIDED_MARK, Palette};
 
-/// Background of a line with nothing opposite it.
-const ONE_SIDED_BG: Color32 = Color32::from_rgb(0x1b, 0x3d, 0x2a);
-/// Background of a line that differs from the line opposite it.
-const CHANGED_BG: Color32 = Color32::from_rgb(0x1f, 0x30, 0x4a);
-/// Background of the words that differ within a changed line.
-const CHANGED_WORD_BG: Color32 = Color32::from_rgb(0x2f, 0x55, 0x8f);
-/// Background opposite a one-sided line.
-const FILLER_BG: Color32 = Color32::from_rgb(0x22, 0x24, 0x28);
-const GUTTER_FG: Color32 = Color32::from_gray(110);
-const TEXT_FG: Color32 = Color32::from_gray(210);
-const DIVIDER: Color32 = Color32::from_gray(60);
-const CURSOR_BG: Color32 = TEXT_FG;
-/// Color of the character under the cursor.
-const CURSOR_FG: Color32 = Color32::from_gray(20);
 /// Width of the cursor in insert mode, a bar before its column.
 const CURSOR_BAR_WIDTH: f32 = 2.0;
-/// Change map mark of one-sided lines.
-const ONE_SIDED_MARK: Color32 = Color32::from_rgb(0x2f, 0x8f, 0x55);
-/// Change map mark of changed lines.
-const CHANGED_MARK: Color32 = Color32::from_rgb(0x3d, 0x6f, 0xc4);
-/// Change map cover over the rows in view.
-const IN_VIEW_COVER: Color32 = Color32::from_rgba_premultiplied(24, 24, 24, 24);
 
 /// Width of the change map beside the rows.
 const MAP_WIDTH: f32 = 16.0;
@@ -211,13 +192,19 @@ pub struct TextView {
     colors: [SideColors; 2],
     colors_rx: Option<Receiver<ColorsChunk>>,
     /// The current highlighting of the left and right side. Colors from an
-    /// earlier one are for text since edited, so they are dropped.
+    /// earlier one are for text since edited or in an earlier theme, so
+    /// they are dropped.
     highlight_runs: Arc<[AtomicUsize; 2]>,
     /// Lines of each side's colors from its current highlighting. The
-    /// colors past them are from before the side's last edit.
+    /// colors past them are from before the side's last edit or theme
+    /// change.
     colors_received: [usize; 2],
     /// What highlighting a side needs, once highlighting has started.
     highlighting: Option<Highlighting>,
+    /// The theme the sides are highlighted in.
+    theme: Arc<Theme>,
+    /// The colors of `theme` the view paints with.
+    palette: Palette,
     /// When diph started.
     started: Instant,
     /// Time from `started` to the first frame.
@@ -231,6 +218,7 @@ impl TextView {
         let buffers = diff.buffers();
         // The right side, unless only the left has lines.
         let cursor_side = [1, 0].into_iter().find(|&s| !buffers[s].lines().is_empty());
+        let theme = Theme::default();
         let mut view = Self {
             cursor_side,
             cursor: Cursor::default(),
@@ -250,6 +238,8 @@ impl TextView {
             highlight_runs: Default::default(),
             colors_received: [0; 2],
             highlighting: None,
+            palette: Palette::new(&theme),
+            theme: Arc::new(theme),
             started,
             startup_time: None,
         };
@@ -282,7 +272,30 @@ impl TextView {
         };
         let run = self.highlight_runs[side].load(Ordering::Relaxed);
         let lines = self.diff.buffers()[side].lines().to_vec();
-        std::thread::spawn(move || highlighting.highlight_side(side, run, &lines));
+        let theme = self.theme.clone();
+        std::thread::spawn(move || highlighting.highlight_side(side, run, &theme, &lines));
+    }
+
+    /// Starts highlighting `side` again. Its colors are replaced from the
+    /// top as the new ones arrive.
+    fn rehighlight(&mut self, side: usize) {
+        self.highlight_runs[side].fetch_add(1, Ordering::Relaxed);
+        self.colors_received[side] = 0;
+        self.highlight(side);
+    }
+
+    pub fn theme(&self) -> &Theme {
+        &self.theme
+    }
+
+    /// Paints the view and egui's panels and menus in `theme`'s colors, and
+    /// highlights both sides in it again.
+    pub fn set_theme(&mut self, ctx: &egui::Context, theme: Theme) {
+        self.palette = Palette::new(&theme);
+        self.palette.apply(ctx);
+        self.theme = Arc::new(theme);
+        self.rehighlight(0);
+        self.rehighlight(1);
     }
 
     pub fn show(&mut self, ui: &mut egui::Ui) {
@@ -358,12 +371,12 @@ impl TextView {
 
         let y = map_y(map, self.diff.rows().len(), in_view.end - in_view.start);
         let painter = ui.painter();
-        painter.rect_filled(map, 0.0, FILLER_BG);
+        painter.rect_filled(map, 0.0, self.palette.filler);
         for (mark, color) in change_marks(self.diff.rows(), map, &y) {
             painter.rect_filled(mark, 0.0, color);
         }
         let cover = Rect::from_x_y_ranges(map.x_range(), y(in_view.start)..=y(in_view.end));
-        painter.rect_filled(cover, 0.0, IN_VIEW_COVER);
+        painter.rect_filled(cover, 0.0, self.palette.in_view_cover);
     }
 
     /// Performs the action of a pressed key, or in insert mode inserts typed
@@ -426,9 +439,7 @@ impl TextView {
     fn edit(&mut self, side: usize, edit: impl FnOnce(&mut Buffer) -> Edit) -> Edit {
         let edit = self.diff.edit(side, edit);
         self.colors[side].apply(&edit);
-        self.highlight_runs[side].fetch_add(1, Ordering::Relaxed);
-        self.colors_received[side] = 0;
-        self.highlight(side);
+        self.rehighlight(side);
         edit
     }
 
@@ -614,6 +625,7 @@ impl TextView {
             char_width,
             font,
             bar_cursor: self.mode == Mode::Insert,
+            palette: self.palette,
         };
 
         ui.spacing_mut().item_spacing.y = 0.0;
@@ -661,13 +673,15 @@ struct Highlighting {
 }
 
 impl Highlighting {
-    /// Highlights `side`'s `lines` as its highlighting `run`, sending the
-    /// colors in chunks and requesting a repaint after each. Stops once
-    /// the side has a later highlighting or the window has closed.
-    fn highlight_side(&self, side: usize, run: usize, lines: &[String]) {
+    /// Highlights `side`'s `lines` in `theme` as its highlighting `run`,
+    /// sending the colors in chunks and requesting a repaint after each.
+    /// Stops once the side has a later highlighting or the window has
+    /// closed.
+    fn highlight_side(&self, side: usize, run: usize, theme: &Theme, lines: &[String]) {
         let highlighter = self.highlighter.get_or_init(Highlighter::default);
         let current = || self.runs[side].load(Ordering::Relaxed) == run;
-        let mut spans = highlighter.highlight(&self.paths[side], lines).peekable();
+        let path = &self.paths[side];
+        let mut spans = highlighter.highlight(theme, path, lines).peekable();
         while spans.peek().is_some() && current() {
             // Stops partway through a chunk too, once it is no longer current.
             let chunk = spans.by_ref().take(HIGHLIGHT_CHUNK);
@@ -681,12 +695,13 @@ impl Highlighting {
     }
 }
 
-/// Background of the sides of `row` that have a line, if the row differs.
-fn background(row: &Row) -> Option<Color32> {
+/// Background in `palette` of the sides of `row` that have a line, if the
+/// row differs.
+fn background(row: &Row, palette: &Palette) -> Option<Color32> {
     match row.kind {
         RowKind::Equal => None,
-        RowKind::LeftOnly | RowKind::RightOnly => Some(ONE_SIDED_BG),
-        RowKind::Changed => Some(CHANGED_BG),
+        RowKind::LeftOnly | RowKind::RightOnly => Some(palette.one_sided),
+        RowKind::Changed => Some(palette.changed),
     }
 }
 
@@ -754,6 +769,7 @@ struct RowLayout {
     half_width: f32,
     /// Whether the cursor is a bar before its column, as in insert mode.
     bar_cursor: bool,
+    palette: Palette,
 }
 
 impl RowLayout {
@@ -777,14 +793,14 @@ impl RowLayout {
             .filter(|_| response.clicked());
         let painter = ui.painter();
         let (left, right) = rect.split_left_right_at_x(rect.left() + self.half_width);
-        let background = background(row);
+        let background = background(row, &self.palette);
         let mut clicked = None;
         for (side, (half, line)) in [(left, &row.left), (right, &row.right)]
             .into_iter()
             .enumerate()
         {
             let Some(line) = line else {
-                painter.rect_filled(half, 0.0, FILLER_BG);
+                painter.rect_filled(half, 0.0, self.palette.filler);
                 continue;
             };
             let text = &buffers[side].lines()[line.index];
@@ -800,7 +816,8 @@ impl RowLayout {
                 clicked = Some((side, Position { line, column }));
             }
         }
-        painter.vline(left.right(), rect.y_range(), Stroke::new(1.0, DIVIDER));
+        let divider = Stroke::new(1.0, self.palette.divider);
+        painter.vline(left.right(), rect.y_range(), divider);
         clicked
     }
 
@@ -826,10 +843,11 @@ impl RowLayout {
         let block = Rect::from_x_y_ranges(x..=x + width, half.y_range());
         let text_rect = Rect::from_min_max(pos2(pos.x, half.top()), half.max);
         let painter = painter.with_clip_rect(text_rect);
-        painter.rect_filled(block, 0.0, CURSOR_BG);
+        painter.rect_filled(block, 0.0, self.palette.cursor);
         if let Some(glyph) = glyph.filter(|_| !self.bar_cursor) {
             let (align, font) = (Align2::LEFT_CENTER, self.font.clone());
-            painter.text(block.left_center(), align, glyph.chr, font, CURSOR_FG);
+            let color = self.palette.cursor_text;
+            painter.text(block.left_center(), align, glyph.chr, font, color);
         }
     }
 
@@ -859,7 +877,7 @@ impl RowLayout {
             Align2::RIGHT_CENTER,
             number,
             self.font.clone(),
-            GUTTER_FG,
+            self.palette.line_number,
         );
 
         let text_rect = Rect::from_min_max(pos2(gutter_right, half.top()), half.max);
@@ -867,21 +885,22 @@ impl RowLayout {
         let pos = pos2(gutter_right, mid_y - galley.size().y / 2.0);
         painter
             .with_clip_rect(text_rect)
-            .galley(pos, galley.clone(), TEXT_FG);
+            .galley(pos, galley.clone(), self.palette.text);
         (pos, galley)
     }
 
     /// Lays out `line`'s `text` in the colors of `spans`, with its changed
-    /// words on [`CHANGED_WORD_BG`].
+    /// words on the palette's changed word background.
     fn line_job(&self, line: &Line, text: &str, spans: &[Span]) -> LayoutJob {
         let color_starts = spans.iter().map(|span| {
             let [r, g, b] = span.rgb;
             (span.range.start, Color32::from_rgb(r, g, b))
         });
+        let changed_word = self.palette.changed_word;
         let background_starts = (line.changed_words.iter())
-            .flat_map(|r| [(r.start, CHANGED_WORD_BG), (r.end, Color32::TRANSPARENT)]);
+            .flat_map(|r| [(r.start, changed_word), (r.end, Color32::TRANSPARENT)]);
         let mut job = LayoutJob::default();
-        let (mut start, mut color, mut background) = (0, TEXT_FG, Color32::TRANSPARENT);
+        let (mut start, mut color, mut background) = (0, self.palette.text, Color32::TRANSPARENT);
         // Each event starts a new color, a new background, or both.
         for event in color_starts.merge_join_by(background_starts, |a, b| a.0.cmp(&b.0)) {
             let end = event.as_ref().reduce(|a, _| a).0;
@@ -1339,6 +1358,28 @@ mod tests {
         let mut harness = Harness::new_ui_state(|ui, view| view.show(ui), view);
         harness.run();
         press(&mut harness, "i x");
+        let lines = vec![Vec::new(); 200];
+        tx.send(ColorsChunk {
+            side: 1,
+            run: 0,
+            lines,
+        })
+        .unwrap();
+        harness.run();
+        assert!(harness.state().colors[1].lines.is_empty());
+    }
+
+    #[test]
+    fn colors_in_an_earlier_theme_are_dropped() {
+        let mut view = unchanged_file();
+        let (tx, rx) = channel();
+        view.colors_rx = Some(rx);
+        let mut harness = Harness::new_ui_state(|ui, view| view.show(ui), view);
+        harness.run();
+        let ctx = harness.ctx.clone();
+        harness
+            .state_mut()
+            .set_theme(&ctx, Theme::named("Nord").unwrap());
         let lines = vec![Vec::new(); 200];
         tx.send(ColorsChunk {
             side: 1,
