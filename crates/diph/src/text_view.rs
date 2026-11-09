@@ -391,13 +391,14 @@ impl TextView {
     fn perform(&mut self, ctx: &egui::Context, action: Action, count: Option<usize>) {
         // The index of the line a count numbers from 1.
         let counted_line = count.map(|line| line - 1);
+        let count = count.unwrap_or(1).try_into().unwrap_or(isize::MAX);
         match action {
             Action::PrevChange => self.step_change(-1),
             Action::NextChange => self.step_change(1),
-            Action::CharLeft => self.move_cursor(|c, b| c.move_column(b, -1)),
-            Action::CharRight => self.move_cursor(|c, b| c.move_column(b, 1)),
-            Action::LineDown => self.move_cursor(|c, b| c.move_line(b, 1)),
-            Action::LineUp => self.move_cursor(|c, b| c.move_line(b, -1)),
+            Action::CharLeft => self.move_cursor(|c, b| c.move_column(b, -count)),
+            Action::CharRight => self.move_cursor(|c, b| c.move_column(b, count)),
+            Action::LineDown => self.move_cursor(|c, b| c.move_line(b, count)),
+            Action::LineUp => self.move_cursor(|c, b| c.move_line(b, -count)),
             Action::FirstLine => {
                 self.move_cursor(|c, b| c.go_to_line(b, counted_line.unwrap_or(0)));
             }
@@ -1041,6 +1042,10 @@ mod tests {
         j_moves_down = { "j j j", 1, 3, 0 },
         k_moves_up = { "j j j k", 1, 2, 0 },
         arrows_move = { "Down Down Right Up Right Right Left", 1, 1, 2 },
+        a_count_before_h_moves_left = { "j 5 l 2 h", 1, 1, 3 },
+        a_count_before_l_moves_right = { "3 l", 1, 0, 3 },
+        a_count_before_j_moves_down = { "5 j", 1, 5, 0 },
+        a_count_before_k_moves_up = { "j j j 2 k", 1, 1, 0 },
         gg_moves_to_the_first_line = { "j j g g", 1, 0, 0 },
         shift_g_moves_to_the_last_line = { "G", 1, 199, 0 },
         caret_moves_to_the_start_of_the_line = { "^", 1, 0, 0 },
