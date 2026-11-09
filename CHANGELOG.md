@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-11-08
+
 ### Added
 
 - A cursor, placed by a click. h, j, k, and l or the arrow keys move it a
@@ -48,7 +50,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Initial release
 
-[unreleased]: https://github.com/speedyleion/gh-difftool/releases/tag/v0.1.2...HEAD
+[unreleased]: https://github.com/speedyleion/gh-difftool/releases/tag/v0.1.3...HEAD
+[0.1.3]: https://github.com/speedyleion/gh-difftool/releases/tag/v0.1.3
 [0.1.2]: https://github.com/speedyleion/gh-difftool/releases/tag/v0.1.2
 [0.1.1]: https://github.com/speedyleion/gh-difftool/releases/tag/v0.1.1
 [0.1.0]: https://github.com/speedyleion/gh-difftool/releases/tag/v0.1.0
