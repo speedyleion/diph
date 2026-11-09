@@ -110,8 +110,7 @@ impl<A: Copy> Keymap<A> {
         None
     }
 
-    /// Whether `key` can add to the count: a key without modifiers typed
-    /// before a sequence's first key, in a keymap with counts.
+    /// Whether `key` can add to the count.
     fn can_count(&self, key: &KeyboardShortcut) -> bool {
         self.counts && self.pending.is_empty() && key.modifiers.is_none()
     }
