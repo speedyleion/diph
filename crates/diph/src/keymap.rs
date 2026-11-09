@@ -16,6 +16,18 @@ const DIGITS: [Key; 10] = [
     Key::Num9,
 ];
 
+/// The modifier keys, whose own presses are not keys of a sequence.
+const MODIFIER_KEYS: [Key; 8] = [
+    Key::ShiftLeft,
+    Key::ShiftRight,
+    Key::ControlLeft,
+    Key::ControlRight,
+    Key::AltLeft,
+    Key::AltRight,
+    Key::SuperLeft,
+    Key::SuperRight,
+];
+
 /// Actions bound to sequences of key presses, which may span several frames.
 /// A key that neither completes nor continues a sequence cancels it, along
 /// with the keys pressed before it.
@@ -63,7 +75,8 @@ impl<A: Copy> Keymap<A> {
     }
 
     /// Lets digits typed before a sequence give it a count, as in vim's
-    /// `10gg`. A 0 adds to a count but doesn't start one.
+    /// `10gg`. A 0 is part of a count only after another digit, so a 0 on
+    /// its own stays free to bind.
     pub fn with_counts(self) -> Self {
         Self {
             counts: true,
@@ -72,7 +85,7 @@ impl<A: Copy> Keymap<A> {
     }
 
     /// Adds `key` to the pending sequence, returning the action it completes
-    /// and the count typed before the sequence, which is at least 1.
+    /// and the count typed before the sequence, if any, which is never 0.
     pub fn press(&mut self, key: KeyboardShortcut) -> Option<(A, Option<usize>)> {
         if let Some(digit) = self.count_digit(&key) {
             let count = self.count.unwrap_or(0).saturating_mul(10);
@@ -97,10 +110,15 @@ impl<A: Copy> Keymap<A> {
         None
     }
 
-    /// The digit `key` adds to the count, if it is a digit without
-    /// modifiers typed before a sequence's first key.
+    /// Whether `key` can add to the count: a key without modifiers typed
+    /// before a sequence's first key, in a keymap with counts.
+    fn can_count(&self, key: &KeyboardShortcut) -> bool {
+        self.counts && self.pending.is_empty() && key.modifiers.is_none()
+    }
+
+    /// The digit `key` adds to the count, if it adds to one.
     fn count_digit(&self, key: &KeyboardShortcut) -> Option<usize> {
-        if !self.counts || !self.pending.is_empty() || !key.modifiers.is_none() {
+        if !self.can_count(key) {
             return None;
         }
         let digit = DIGITS.iter().position(|d| *d == key.logical_key)?;
@@ -109,6 +127,7 @@ impl<A: Copy> Keymap<A> {
 }
 
 /// The key and modifiers of a key press, including repeats from holding it.
+/// None for a press of a modifier key itself.
 pub fn pressed_key(event: &Event) -> Option<KeyboardShortcut> {
     match event {
         Event::Key {
@@ -116,7 +135,7 @@ pub fn pressed_key(event: &Event) -> Option<KeyboardShortcut> {
             pressed: true,
             modifiers,
             ..
-        } => Some(KeyboardShortcut::new(*modifiers, *key)),
+        } if !MODIFIER_KEYS.contains(key) => Some(KeyboardShortcut::new(*modifiers, *key)),
         _ => None,
     }
 }

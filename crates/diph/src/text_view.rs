@@ -994,10 +994,17 @@ mod tests {
     }
 
     /// Presses `keys`, in [`typed_in_unchanged_file`]'s notation, one per
-    /// frame.
+    /// frame. A key with Shift or Ctrl comes after a press of that modifier
+    /// key, as a keyboard sends it.
     fn press(harness: &mut Harness<'static, TextView>, keys: &str) {
         for key in keys.split_whitespace() {
             let (modifiers, pressed) = key_press(key);
+            if modifiers.shift {
+                harness.key_press(Key::ShiftLeft);
+            }
+            if modifiers.ctrl {
+                harness.key_press(Key::ControlLeft);
+            }
             harness.key_press_modifiers(modifiers, pressed);
             if key.chars().count() == 1 {
                 harness.event(egui::Event::Text(key.to_owned()));
@@ -1048,7 +1055,7 @@ mod tests {
         a_count_past_the_last_line_moves_to_the_last_line = { "9 9 9 g g", 1, 199, 0 },
         a_count_is_used_once = { "5 g g j g g", 1, 0, 0 },
         a_cancelled_sequence_drops_its_count = { "5 g j g g", 1, 0, 0 },
-        zero_alone_is_not_a_count = { "j 0 g g", 1, 0, 0 },
+        zero_alone_is_not_a_count = { "j 0 G", 1, 199, 0 },
     )]
     fn keys_move_the_cursor(keys: &str, side: usize, line: usize, column: usize) {
         let harness = typed_in_unchanged_file(keys);
