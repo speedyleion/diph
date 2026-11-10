@@ -7,11 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-11-09
+
 ### Added
 
 - View > Themes picks the color theme, which colors the syntax, the text,
   and the background, and is remembered between runs. On macOS the menu is
   in the system menu bar.
+- Ctrl+f, Ctrl+d, Ctrl+b, Ctrl+u vim like navigation.
 
 ## [0.1.3] - 2026-11-08
 
@@ -56,7 +59,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Initial release
 
-[unreleased]: https://github.com/speedyleion/gh-difftool/releases/tag/v0.1.3...HEAD
+[unreleased]: https://github.com/speedyleion/gh-difftool/releases/tag/v0.1.4...HEAD
+[0.1.4]: https://github.com/speedyleion/gh-difftool/releases/tag/v0.1.4
 [0.1.3]: https://github.com/speedyleion/gh-difftool/releases/tag/v0.1.3
 [0.1.2]: https://github.com/speedyleion/gh-difftool/releases/tag/v0.1.2
 [0.1.1]: https://github.com/speedyleion/gh-difftool/releases/tag/v0.1.1
