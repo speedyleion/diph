@@ -56,6 +56,10 @@ enum Action {
     CharRight,
     LineDown,
     LineUp,
+    HalfPageDown,
+    HalfPageUp,
+    PageDown,
+    PageUp,
     /// The line of the count, or the first line without one.
     FirstLine,
     /// The line of the count, or the last line without one.
@@ -118,6 +122,10 @@ fn normal_keymap() -> Keymap<Action> {
         (vec![key(Key::ArrowDown)], Action::LineDown),
         (vec![key(Key::K)], Action::LineUp),
         (vec![key(Key::ArrowUp)], Action::LineUp),
+        (vec![ctrl(Key::D)], Action::HalfPageDown),
+        (vec![ctrl(Key::U)], Action::HalfPageUp),
+        (vec![ctrl(Key::F)], Action::PageDown),
+        (vec![ctrl(Key::B)], Action::PageUp),
         (vec![key(Key::G), key(Key::G)], Action::FirstLine),
         (vec![shift(Key::G)], Action::LastLine),
         (vec![shift(Key::Num6)], Action::LineStart),
@@ -412,6 +420,18 @@ impl TextView {
             Action::CharRight => self.move_cursor(|c, b| c.move_column(b, count)),
             Action::LineDown => self.move_cursor(|c, b| c.move_line(b, count)),
             Action::LineUp => self.move_cursor(|c, b| c.move_line(b, -count)),
+            Action::HalfPageDown => {
+                self.move_page((self.rows_in_view / 2).max(1) as isize, count);
+            }
+            Action::HalfPageUp => {
+                self.move_page(-((self.rows_in_view / 2).max(1) as isize), count);
+            }
+            Action::PageDown => {
+                self.move_page(self.rows_in_view.max(1) as isize, count);
+            }
+            Action::PageUp => {
+                self.move_page(-(self.rows_in_view.max(1) as isize), count);
+            }
             Action::FirstLine => {
                 self.move_cursor(|c, b| c.go_to_line(b, counted_line.unwrap_or(0)));
             }
@@ -581,6 +601,41 @@ impl TextView {
         } else if row >= top_row + rows_in_view {
             self.scroll_to_top_row = Some(row + 1 - rows_in_view);
         }
+    }
+
+    /// Moves the view by `rows` multiplied by `count`, placing the cursor at
+    /// the new top or bottom row.
+    fn move_page(&mut self, rows: isize, count: isize) {
+        let Some(side) = self.cursor_side else {
+            return;
+        };
+        let Some(position) = self.cursor_position().map(|(_, position)| position) else {
+            return;
+        };
+        let rows_in_view = self.rows_in_view.max(1);
+        let max_top = self.diff.rows().len().saturating_sub(rows_in_view);
+        let old_top = self.scroll_to_top_row.unwrap_or(self.top_row);
+        let top = self
+            .scroll_to_top_row
+            .unwrap_or(self.top_row)
+            .saturating_add_signed(rows.saturating_mul(count))
+            .min(max_top);
+        self.scroll_to_top_row = Some(top);
+        let row = match top == old_top {
+            true => self
+                .diff
+                .row_of(side, position.line)
+                .saturating_add_signed(rows.saturating_mul(count))
+                .min(self.diff.rows().len().saturating_sub(1)),
+            false => self
+                .diff
+                .row_of(side, position.line)
+                .clamp(top, top + rows_in_view.saturating_sub(1)),
+        };
+        let Some(line) = self.diff.line_at(side, row) else {
+            return;
+        };
+        self.move_cursor(|c, b| c.go_to_line(b, line));
     }
 
     /// Moves `delta` changes forward or back, stopping at the first and last,
@@ -1085,6 +1140,98 @@ mod tests {
         let harness = typed_in_unchanged_file(keys);
         let cursor = harness.state().cursor_position();
         assert_eq!(cursor, Some((side, Position { line, column })));
+    }
+
+    #[test]
+    fn ctrl_d_moves_down_half_a_view() {
+        let harness = typed_in_unchanged_file("C-d");
+        let rows_in_view = harness.state().rows_in_view;
+        assert_eq!(
+            harness.state().cursor_position().unwrap().1.line,
+            rows_in_view / 2
+        );
+        assert_eq!(harness.state().top_row, rows_in_view / 2);
+    }
+
+    #[test]
+    fn ctrl_u_moves_up_half_a_view() {
+        let rows_in_view = typed_in_unchanged_file("").state().rows_in_view;
+        let harness = typed_in_unchanged_file("G C-u");
+        assert_eq!(
+            harness.state().cursor_position().unwrap().1.line,
+            199 - rows_in_view / 2
+        );
+        assert_eq!(
+            harness.state().top_row,
+            (199 - rows_in_view / 2).saturating_sub(rows_in_view - 1)
+        );
+    }
+
+    #[test]
+    fn ctrl_u_keeps_moving_cursor_after_view_reaches_the_top() {
+        let rows_in_view = typed_in_unchanged_file("").state().rows_in_view;
+        let half_view = (rows_in_view / 2).max(1);
+        let moves_to_top = (200 - rows_in_view).div_ceil(half_view);
+        let keys = format!("G {}", "C-u ".repeat(moves_to_top + 1));
+        let harness = typed_in_unchanged_file(&keys);
+
+        assert_eq!(harness.state().top_row, 0);
+        assert_eq!(
+            harness.state().cursor_position().unwrap().1.line,
+            rows_in_view - 1 - rows_in_view / 2
+        );
+    }
+
+    #[test]
+    fn ctrl_f_moves_down_a_view() {
+        let harness = typed_in_unchanged_file("C-f");
+        let rows_in_view = harness.state().rows_in_view;
+        assert_eq!(
+            harness.state().cursor_position().unwrap().1.line,
+            rows_in_view
+        );
+        assert_eq!(harness.state().top_row, rows_in_view);
+    }
+
+    #[test]
+    fn ctrl_f_after_ctrl_b_moves_to_the_next_row() {
+        let rows_in_view = typed_in_unchanged_file("").state().rows_in_view;
+        let harness = typed_in_unchanged_file("G C-b C-f");
+
+        assert_eq!(
+            harness.state().cursor_position().unwrap().1.line,
+            199 - rows_in_view + 1
+        );
+        assert_eq!(harness.state().top_row, 199 - rows_in_view + 1);
+    }
+
+    #[test]
+    fn ctrl_d_keeps_moving_cursor_after_view_reaches_the_bottom() {
+        let rows_in_view = typed_in_unchanged_file("").state().rows_in_view;
+        let half_view = (rows_in_view / 2).max(1);
+        let moves_to_bottom = (200 - rows_in_view).div_ceil(half_view);
+        let keys = "C-d ".repeat(moves_to_bottom + 1);
+        let harness = typed_in_unchanged_file(&keys);
+
+        assert_eq!(harness.state().top_row, 200 - rows_in_view);
+        assert_eq!(
+            harness.state().cursor_position().unwrap().1.line,
+            200 - rows_in_view + rows_in_view / 2
+        );
+    }
+
+    #[test]
+    fn ctrl_b_moves_up_a_view() {
+        let rows_in_view = typed_in_unchanged_file("").state().rows_in_view;
+        let harness = typed_in_unchanged_file("G C-b");
+        assert_eq!(
+            harness.state().cursor_position().unwrap().1.line,
+            199 - rows_in_view
+        );
+        assert_eq!(
+            harness.state().top_row,
+            (199 - rows_in_view).saturating_sub(rows_in_view - 1)
+        );
     }
 
     #[yare::parameterized(

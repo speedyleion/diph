@@ -51,6 +51,8 @@ crate descriptions, and `--help` text: describe what the code does now.
 - When related values depend on the same match or condition, compute them
   together and destructure the result immediately instead of repeating the
   match.
+- Prefer a `match` expression over nested `else if` branches when choosing
+  between cases of the same value or condition.
 - When a nested collection's layers mean different things, wrap a layer
   in a named type (`SideColors`, not `Vec<Vec<Span>>`).
 - Keep values that describe the same thing together in a struct, and
