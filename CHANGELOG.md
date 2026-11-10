@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- View > Themes picks the color theme, which colors the syntax, the text,
+  and the background, and is remembered between runs. On macOS the menu is
+  in the system menu bar.
+
 ## [0.1.3] - 2026-11-08
 
 ### Added

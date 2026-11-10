@@ -4,10 +4,9 @@ use std::ops::Range;
 use std::path::Path;
 
 use syntect::easy::HighlightLines;
-use syntect::highlighting::{Theme, ThemeSet};
 use syntect::parsing::{SyntaxReference, SyntaxSet};
 
-use crate::{Edit, Line};
+use crate::{Edit, Line, Theme};
 
 /// A highlighted run of a line.
 #[derive(Clone, Debug, PartialEq)]
@@ -79,32 +78,28 @@ fn clipped(spans: &[Span], bytes: Range<usize>) -> impl Iterator<Item = Span> {
 
 pub struct Highlighter {
     syntaxes: SyntaxSet,
-    theme: Theme,
 }
 
 impl Default for Highlighter {
     fn default() -> Self {
-        let mut themes = ThemeSet::load_defaults();
         Self {
             syntaxes: two_face::syntax::extra_newlines(),
-            theme: themes
-                .themes
-                .remove("base16-ocean.dark")
-                .expect("bundled theme"),
         }
     }
 }
 
 impl Highlighter {
-    /// Highlights `lines` (without line endings) as the language picked from
-    /// `path`'s name, or else from the first line, e.g. a `#!` line. The
-    /// iterator is lazy, so callers can take lines in chunks.
+    /// Highlights `lines` (without line endings) in the colors of `theme`
+    /// as the language picked from `path`'s name, or else from the first
+    /// line, e.g. a `#!` line. The iterator is lazy, so callers can take
+    /// lines in chunks.
     pub fn highlight<'a>(
         &'a self,
+        theme: &'a Theme,
         path: &Path,
         lines: &'a [String],
     ) -> impl Iterator<Item = Vec<Span>> + 'a {
-        let mut state = HighlightLines::new(self.syntax(path, lines), &self.theme);
+        let mut state = HighlightLines::new(self.syntax(path, lines), &theme.syntect);
         lines
             .iter()
             .map(move |line| self.highlight_line(&mut state, line))
@@ -152,8 +147,9 @@ mod tests {
     fn colored_words(path: &str, text: &str) -> Vec<Vec<String>> {
         let lines: Vec<String> = text.lines().map(str::to_owned).collect();
         let highlighter = Highlighter::default();
+        let theme = Theme::default();
         highlighter
-            .highlight(Path::new(path), &lines)
+            .highlight(&theme, Path::new(path), &lines)
             .zip(&lines)
             .map(|(spans, line)| {
                 spans
