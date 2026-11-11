@@ -12,6 +12,7 @@ mod platform;
 /// An action selected from the application menu.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MenuAction {
+    Save,
     Theme(String),
 }
 

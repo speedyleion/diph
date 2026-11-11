@@ -2,7 +2,7 @@ use std::sync::mpsc::{Receiver, channel};
 
 use diph_core::Theme;
 use eframe::egui;
-use muda::{CheckMenuItem, IsMenuItem, MenuEvent, PredefinedMenuItem, Submenu};
+use muda::{CheckMenuItem, IsMenuItem, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 
 use crate::menu::MenuAction;
 
@@ -42,17 +42,28 @@ impl MenuBar {
         let picked: Vec<_> = self
             .events
             .try_iter()
-            .filter_map(|event| Theme::names().find(|&name| event.id == name))
+            .filter_map(|event| {
+                if event.id == "save" {
+                    Some(MenuAction::Save)
+                } else {
+                    Theme::names()
+                        .find(|&name| event.id == name)
+                        .map(|name| MenuAction::Theme(name.to_owned()))
+                }
+            })
             .collect();
         picked
             .into_iter()
-            .map(|picked| {
-                // Choosing an item toggles it, so a chosen theme that was already
-                // checked would be unchecked.
-                for item in &self.themes {
-                    item.set_checked(*item.id() == picked);
+            .map(|action| match action {
+                MenuAction::Save => MenuAction::Save,
+                MenuAction::Theme(picked) => {
+                    // Choosing an item toggles it, so a chosen theme that was already
+                    // checked would be unchecked.
+                    for item in &self.themes {
+                        item.set_checked(*item.id() == picked);
+                    }
+                    MenuAction::Theme(picked)
                 }
-                MenuAction::Theme(picked.to_owned())
             })
             .collect()
     }
@@ -80,5 +91,7 @@ fn menu_bar(themes: &[CheckMenuItem]) -> muda::Result<muda::Menu> {
         themes.iter().map(|item| item as &dyn IsMenuItem).collect();
     let themes = Submenu::with_items("Themes", true, &theme_items)?;
     let view = Submenu::with_items("View", true, &[&themes])?;
-    muda::Menu::with_items(&[&app, &view])
+    let save = MenuItem::with_id("save", "Save", true, None);
+    let file = Submenu::with_items("File", true, &[&save])?;
+    muda::Menu::with_items(&[&app, &file, &view])
 }
