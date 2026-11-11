@@ -20,6 +20,12 @@ impl MenuBar {
         let mut actions = Vec::new();
         egui::Panel::top("menu_bar").show(ui, |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
+                ui.menu_button("File", |ui| {
+                    if ui.button("Save").clicked() {
+                        actions.push(MenuAction::Save);
+                        ui.close();
+                    }
+                });
                 ui.menu_button("View", |ui| {
                     ui.menu_button("Themes", |ui| {
                         if let Some(action) = self.theme_buttons(ui, self.theme) {

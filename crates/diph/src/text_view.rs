@@ -481,7 +481,7 @@ impl TextView {
     }
 
     /// Writes the text of the side with the cursor to its file.
-    fn save(&mut self) {
+    pub(crate) fn save(&mut self) {
         let Some(side) = self.cursor_side else {
             return;
         };

@@ -113,6 +113,7 @@ impl eframe::App for App {
 
 fn handle_menu_action(action: MenuAction, ctx: &egui::Context, view: &mut TextView) {
     match action {
+        MenuAction::Save => view.save(),
         MenuAction::Theme(name) => {
             if let Some(theme) = Theme::named(&name) {
                 view.set_theme(ctx, theme);
