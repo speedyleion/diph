@@ -1,33 +1,44 @@
 use diph_core::Theme;
 use eframe::egui;
 
-pub struct MenuBar;
+use crate::menu::MenuAction;
 
-impl MenuBar {
-    pub fn new(_ctx: &egui::Context, _theme: &str) -> Self {
-        Self
-    }
-
-    /// Shows the bar at the top of `ui`, with `theme` picked. Returns
-    /// the theme picked, if any.
-    pub fn show(&mut self, ui: &mut egui::Ui, theme: &str) -> Option<&'static str> {
-        let bar = egui::Panel::top("menu_bar").show(ui, |ui| {
-            egui::MenuBar::new().ui(ui, |ui| {
-                let view = ui.menu_button("View", |ui| {
-                    let themes = ui.menu_button("Themes", |ui| theme_buttons(ui, theme));
-                    themes.inner.flatten()
-                });
-                view.inner.flatten()
-            })
-        });
-        bar.inner.inner
-    }
+pub struct MenuBar {
+    theme: &'static str,
 }
 
-/// A radio button per theme, with `theme`'s selected. Returns the theme
-/// clicked, if any.
-fn theme_buttons(ui: &mut egui::Ui, theme: &str) -> Option<&'static str> {
-    Theme::names()
-        .filter(|&name| ui.radio(name == theme, name).clicked())
-        .last()
+impl MenuBar {
+    pub fn new(theme: &str, _wake: impl Fn() + Send + Sync + 'static) -> Self {
+        let theme = Theme::names()
+            .find(|&name| name == theme)
+            .unwrap_or_else(|| Theme::names().next().expect("there is a default theme"));
+        Self { theme }
+    }
+
+    /// Shows the bar at the top of `ui` and returns its selected actions.
+    pub fn ui(&mut self, ui: &mut egui::Ui) -> Vec<MenuAction> {
+        let mut actions = Vec::new();
+        egui::Panel::top("menu_bar").show(ui, |ui| {
+            egui::MenuBar::new().ui(ui, |ui| {
+                ui.menu_button("View", |ui| {
+                    ui.menu_button("Themes", |ui| {
+                        if let Some(action) = self.theme_buttons(ui, self.theme) {
+                            actions.push(action);
+                        }
+                    });
+                });
+            })
+        });
+        actions
+    }
+
+    fn theme_buttons(&mut self, ui: &mut egui::Ui, theme: &str) -> Option<MenuAction> {
+        for name in Theme::names() {
+            if ui.selectable_label(name == theme, name).clicked() {
+                self.theme = name;
+                return Some(MenuAction::Theme(name.to_owned()));
+            }
+        }
+        None
+    }
 }

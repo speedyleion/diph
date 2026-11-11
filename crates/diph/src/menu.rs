@@ -9,4 +9,10 @@ mod platform;
 #[path = "menu/macos.rs"]
 mod platform;
 
+/// An action selected from the application menu.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MenuAction {
+    Theme(String),
+}
+
 pub use platform::MenuBar;

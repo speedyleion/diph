@@ -4,6 +4,8 @@ use diph_core::Theme;
 use eframe::egui;
 use muda::{CheckMenuItem, IsMenuItem, MenuEvent, PredefinedMenuItem, Submenu};
 
+use crate::menu::MenuAction;
+
 /// The app's menus in the system menu bar.
 pub struct MenuBar {
     /// Keeps the menus alive.
@@ -14,9 +16,9 @@ pub struct MenuBar {
 }
 
 impl MenuBar {
-    /// Replaces the app's menus in the system menu bar, with `theme`
-    /// picked. Choosing an item requests a repaint of `ctx`.
-    pub fn new(ctx: &egui::Context, theme: &str) -> Self {
+    /// Replaces the app's menus in the system menu bar, with `theme` picked.
+    /// Choosing an item wakes the application event loop.
+    pub fn new(theme: &str, wake: impl Fn() + Send + Sync + 'static) -> Self {
         let themes: Vec<_> = Theme::names()
             .map(|name| CheckMenuItem::with_id(name, name, true, name == theme, None))
             .collect();
@@ -24,11 +26,9 @@ impl MenuBar {
         bar.init_for_nsapp();
 
         let (tx, events) = channel();
-        let ctx = ctx.clone();
-        // egui only draws a frame when something asks it to.
         MenuEvent::set_event_handler(Some(move |event| {
             let _ = tx.send(event);
-            ctx.request_repaint();
+            wake();
         }));
         Self {
             _bar: bar,
@@ -37,19 +37,24 @@ impl MenuBar {
         }
     }
 
-    /// The theme picked since the last call, if any.
-    pub fn show(&mut self, _ui: &mut egui::Ui, _theme: &str) -> Option<&'static str> {
-        let picked = self
+    /// Returns all recognized menu actions picked since the last call.
+    pub fn ui(&mut self, _ui: &mut egui::Ui) -> Vec<MenuAction> {
+        let picked: Vec<_> = self
             .events
             .try_iter()
             .filter_map(|event| Theme::names().find(|&name| event.id == name))
-            .last()?;
-        // Choosing an item toggles it, so a chosen theme that was already
-        // checked would be unchecked.
-        for item in &self.themes {
-            item.set_checked(*item.id() == picked);
-        }
-        Some(picked)
+            .collect();
+        picked
+            .into_iter()
+            .map(|picked| {
+                // Choosing an item toggles it, so a chosen theme that was already
+                // checked would be unchecked.
+                for item in &self.themes {
+                    item.set_checked(*item.id() == picked);
+                }
+                MenuAction::Theme(picked.to_owned())
+            })
+            .collect()
     }
 }
 

@@ -12,8 +12,9 @@ use anyhow::Context as _;
 use clap::{CommandFactory as _, Parser, error::ErrorKind};
 use diph_core::{Buffer, SideBySide, Theme};
 use eframe::egui;
+use winit::event_loop::{EventLoop, EventLoopProxy};
 
-use menu::MenuBar;
+use menu::{MenuAction, MenuBar};
 use text_view::{SideFile, TextView};
 
 /// The key the name of the picked theme is saved under between runs.
@@ -90,16 +91,25 @@ struct App {
 
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        let current = self.view.theme().name();
-        let picked = self.menu.show(ui, current);
-        if let Some(theme) = picked.filter(|&p| p != current).and_then(Theme::named) {
-            self.view.set_theme(ui.ctx(), theme);
+        let ctx = ui.ctx().clone();
+        for action in self.menu.ui(ui) {
+            handle_menu_action(action, &ctx, &mut self.view);
         }
         self.view.show(ui);
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         storage.set_string(THEME_KEY, self.view.theme().name().to_owned());
+    }
+}
+
+fn handle_menu_action(action: MenuAction, ctx: &egui::Context, view: &mut TextView) {
+    match action {
+        MenuAction::Theme(name) => {
+            if let Some(theme) = Theme::named(&name) {
+                view.set_theme(ctx, theme);
+            }
+        }
     }
 }
 
@@ -181,7 +191,9 @@ fn main() -> anyhow::Result<()> {
         viewport: egui::ViewportBuilder::default().with_inner_size([1400.0, 900.0]),
         ..Default::default()
     };
-    eframe::run_native(
+    let event_loop = EventLoop::with_user_event().build()?;
+    let proxy = event_loop.create_proxy();
+    let mut app = eframe::create_native(
         "diph",
         options,
         Box::new(move |cc| {
@@ -192,13 +204,25 @@ fn main() -> anyhow::Result<()> {
                 .and_then(|storage| storage.get_string(THEME_KEY))
                 .and_then(|name| Theme::named(&name))
                 .unwrap_or_default();
-            let menu = MenuBar::new(&cc.egui_ctx, theme.name());
+            let menu = MenuBar::new(theme.name(), wake_event_loop(proxy));
             view.set_theme(&cc.egui_ctx, theme);
             view.highlight_in_background(paths, cc.egui_ctx.clone());
             Ok(Box::new(App { view, menu }))
         }),
-    )
-    .map_err(|e| anyhow::anyhow!("{e}"))
+        &event_loop,
+    );
+    event_loop.run_app(&mut app)?;
+    Ok(())
+}
+
+fn wake_event_loop(proxy: EventLoopProxy<eframe::UserEvent>) -> impl Fn() + Send + Sync + 'static {
+    move || {
+        let _ = proxy.send_event(eframe::UserEvent::RequestRepaint {
+            viewport_id: egui::ViewportId::ROOT,
+            when: Instant::now(),
+            cumulative_pass_nr: 0,
+        });
+    }
 }
 
 #[cfg(test)]
