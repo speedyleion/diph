@@ -52,6 +52,9 @@ struct ColorsChunk {
 enum Action {
     PrevChange,
     NextChange,
+    CursorBottom,
+    CursorTop,
+    CursorCenter,
     CharLeft,
     CharRight,
     LineDown,
@@ -114,6 +117,9 @@ fn normal_keymap() -> Keymap<Action> {
         (vec![shift(Key::F7)], Action::PrevChange),
         (vec![key(Key::N)], Action::NextChange),
         (vec![key(Key::F7)], Action::NextChange),
+        (vec![key(Key::Z), key(Key::B)], Action::CursorBottom),
+        (vec![key(Key::Z), key(Key::T)], Action::CursorTop),
+        (vec![key(Key::Z), key(Key::Z)], Action::CursorCenter),
         (vec![key(Key::H)], Action::CharLeft),
         (vec![key(Key::ArrowLeft)], Action::CharLeft),
         (vec![key(Key::L)], Action::CharRight),
@@ -416,6 +422,13 @@ impl TextView {
         match action {
             Action::PrevChange => self.step_change(-1),
             Action::NextChange => self.step_change(1),
+            Action::CursorBottom => {
+                self.align_cursor(|row, rows| row.saturating_add(1).saturating_sub(rows))
+            }
+            Action::CursorTop => self.align_cursor(|row, _| row),
+            Action::CursorCenter => {
+                self.align_cursor(|row, rows| row.saturating_sub(rows.saturating_sub(1) / 2))
+            }
             Action::CharLeft => self.move_cursor(|c, b| c.move_column(b, -count)),
             Action::CharRight => self.move_cursor(|c, b| c.move_column(b, count)),
             Action::LineDown => self.move_cursor(|c, b| c.move_line(b, count)),
@@ -636,6 +649,17 @@ impl TextView {
             return;
         };
         self.move_cursor(|c, b| c.go_to_line(b, line));
+    }
+
+    /// Scrolls the view so the cursor row is at the position returned by
+    /// `top_row`.
+    fn align_cursor(&mut self, top_row: impl FnOnce(usize, usize) -> usize) {
+        let Some((side, position)) = self.cursor_position() else {
+            return;
+        };
+        let rows_in_view = self.rows_in_view.max(1);
+        let row = self.diff.row_of(side, position.line);
+        self.scroll_to_top_row = Some(top_row(row, rows_in_view));
     }
 
     /// Moves `delta` changes forward or back, stopping at the first and last,
@@ -1259,6 +1283,29 @@ mod tests {
         let bottom = typed_in_unchanged_file(&"j ".repeat(250)).state().top_row;
         let harness = typed_in_unchanged_file("G");
         assert_eq!(harness.state().top_row, bottom);
+    }
+
+    #[test]
+    fn zt_scrolls_the_cursor_to_the_top() {
+        let harness = typed_in_unchanged_file(&format!("{}z t", "j ".repeat(50)));
+        assert_eq!(harness.state().top_row, 50);
+    }
+
+    #[test]
+    fn zb_scrolls_the_cursor_to_the_bottom() {
+        let harness = typed_in_unchanged_file(&format!("{}z b", "j ".repeat(50)));
+        let rows_in_view = harness.state().rows_in_view;
+        assert_eq!(harness.state().top_row, 51 - rows_in_view);
+    }
+
+    #[test]
+    fn zz_scrolls_the_cursor_to_the_center() {
+        let harness = typed_in_unchanged_file(&format!("{}z z", "j ".repeat(50)));
+        let rows_in_view = harness.state().rows_in_view;
+        assert_eq!(
+            harness.state().top_row,
+            50 - rows_in_view.saturating_sub(1) / 2
+        );
     }
 
     #[test]
