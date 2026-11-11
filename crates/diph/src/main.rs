@@ -98,6 +98,14 @@ impl eframe::App for App {
         self.view.show(ui);
     }
 
+    fn persist_egui_memory(&self) -> bool {
+        // We use false here, because the scroll position will affect opening subsequent files.
+        // Initial diff is on line 1 of file_a. We open a diff for file_b and
+        // the first change is on line 400. When this data is stored file_b will scroll to line 400.
+        // Without persisting file_b will appear to open at line 400.
+        false
+    }
+
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         storage.set_string(THEME_KEY, self.view.theme().name().to_owned());
     }
