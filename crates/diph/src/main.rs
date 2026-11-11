@@ -130,11 +130,11 @@ fn read(path: &Path) -> anyhow::Result<Vec<u8>> {
 
 /// The name to show for a side: "(none)" for `/dev/null`, else the label if
 /// given, else the path.
-fn shown(path: &Path, label: Option<&Path>) -> String {
+fn shown(path: &Path, label: Option<&Path>) -> PathBuf {
     match label {
-        _ if is_null(path) => "(none)".to_owned(),
-        Some(label) => label.display().to_string(),
-        None => path.display().to_string(),
+        _ if is_null(path) => PathBuf::from("(none)"),
+        Some(label) => label.to_path_buf(),
+        None => path.to_path_buf(),
     }
 }
 
