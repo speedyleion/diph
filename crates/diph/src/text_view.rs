@@ -1,7 +1,7 @@
 //! Side-by-side text diff view.
 
 use std::ops::Range;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, OnceLock};
@@ -171,7 +171,7 @@ fn insert_keymap() -> Keymap<Action> {
 /// The file of one side of the diff.
 pub struct SideFile {
     /// The name shown above the side.
-    pub label: String,
+    pub label: PathBuf,
     /// Where the side saves to; none when it can't be saved.
     pub save_path: Option<PathBuf>,
 }
@@ -357,8 +357,12 @@ impl TextView {
                 ui.label(format!("change {current} of {}", self.diff.changes().len()));
             });
             ui.columns(2, |cols| {
-                cols[0].monospace(&self.files[0].label);
-                cols[1].monospace(&self.files[1].label);
+                for (column, file) in cols.iter_mut().zip(&self.files) {
+                    let font = TextStyle::Monospace.resolve(column.style());
+                    let char_width = column.fonts_mut(|f| f.glyph_width(&font, '0'));
+                    let label = truncate_label(&file.label, column.available_width(), char_width);
+                    column.monospace(label);
+                }
             });
         });
         egui::Panel::bottom("status_bar").show(ui, |ui| {
@@ -483,7 +487,7 @@ impl TextView {
         };
         let SideFile { label, save_path } = &self.files[side];
         self.save_message = Some(match save_path {
-            None => format!("{label} can't be saved"),
+            None => format!("{} can't be saved", label.display()),
             Some(file) => match std::fs::write(file, self.diff.buffers()[side].text()) {
                 Ok(()) => format!("saved {}", file.display()),
                 Err(e) => format!("couldn't save {}: {e}", file.display()),
@@ -736,6 +740,30 @@ impl TextView {
         self.rows_in_view = (bottom.floor() as usize).saturating_sub(self.top_row);
         top..bottom
     }
+}
+
+/// Shortens `label` to fit `width`, keeping its filename when possible.
+fn truncate_label(path: &Path, width: f32, char_width: f32) -> String {
+    let label = path.to_string_lossy();
+    let max_chars = (width / char_width).floor() as usize;
+    if label.chars().count() <= max_chars {
+        return label.into_owned();
+    }
+
+    let filename = path
+        .file_name()
+        .and_then(|filename| filename.to_str())
+        .unwrap_or(&label);
+    let filename_label = format!(".../{filename}");
+    if filename_label.chars().count() <= max_chars {
+        return filename_label;
+    }
+
+    let tail = label.chars().rev().take(max_chars.saturating_sub(3));
+    format!(
+        "...{}",
+        tail.collect::<String>().chars().rev().collect::<String>()
+    )
 }
 
 /// What highlighting a side on a background thread needs.
@@ -1021,6 +1049,24 @@ fn column_at(glyphs: &[Glyph], x: f32) -> usize {
 mod tests {
     use super::*;
     use egui_kittest::{Harness, kittest::Queryable as _};
+
+    #[yare::parameterized(
+        full_label_fits_at_its_boundary = { "src/main.rs", 11, "src/main.rs" },
+        full_label_falls_back_to_tail_at_its_boundary = { "src/main.rs", 10, "...main.rs" },
+        filename_form_fits_at_its_boundary = { "src/very/long/main.rs", 11, ".../main.rs" },
+        filename_form_falls_back_to_tail_at_its_boundary = {
+            "src/very/long/main.rs", 10, "...main.rs"
+        },
+        tail_form_has_one_character_before_ellipsis = { "src/main.rs", 4, "...s" },
+        tail_form_becomes_ellipsis_at_its_boundary = { "src/main.rs", 3, "..." },
+        ellipsis_remains_at_narrower_width = { "src/main.rs", 2, "..." },
+    )]
+    fn truncate_label(label: &str, width: usize, expected: &str) {
+        assert_eq!(
+            super::truncate_label(Path::new(label), width as f32, 1.0),
+            expected
+        );
+    }
 
     /// Three separate one-line changes with unchanged lines between them.
     fn three_changes() -> TextView {
