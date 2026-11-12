@@ -11,9 +11,8 @@ use diph_core::{
     Buffer, Edit, Highlighter, Line, Position, Row, RowKind, SideBySide, SideColors, Span, Theme,
 };
 use eframe::egui::{
-    self, Align2, Color32, CursorIcon, FontId, Galley, Key, KeyboardShortcut, Modifiers, Painter,
-    Pos2, Rect, ScrollArea, Sense, Stroke, TextFormat, TextStyle, UiBuilder, epaint::text::Glyph,
-    pos2, text::LayoutJob, vec2,
+    self, Align2, Color32, CursorIcon, FontId, Galley, Painter, Pos2, Rect, ScrollArea, Sense,
+    Stroke, TextFormat, TextStyle, UiBuilder, epaint::text::Glyph, pos2, text::LayoutJob, vec2,
 };
 use itertools::{
     EitherOrBoth::{Both, Left, Right},
@@ -21,7 +20,9 @@ use itertools::{
 };
 
 use crate::cursor::Cursor;
-use crate::keymap::{Keymap, pressed_key};
+use crate::keymap::{
+    Action, InsertAt, Keymap, OpenLineAt, insert_keymap, normal_keymap, pressed_key,
+};
 use crate::palette::{CHANGED_MARK, ONE_SIDED_MARK, Palette};
 
 /// Width of the cursor in insert mode, a bar before its column.
@@ -47,125 +48,11 @@ struct ColorsChunk {
     lines: Vec<Vec<Span>>,
 }
 
-/// What a key sequence asks the view to do.
-#[derive(Clone, Copy)]
-enum Action {
-    PrevChange,
-    NextChange,
-    CursorBottom,
-    CursorTop,
-    CursorCenter,
-    CharLeft,
-    CharRight,
-    LineDown,
-    LineUp,
-    HalfPageDown,
-    HalfPageUp,
-    PageDown,
-    PageUp,
-    /// The line of the count, or the first line without one.
-    FirstLine,
-    /// The line of the count, or the last line without one.
-    LastLine,
-    LineStart,
-    LineEnd,
-    LeftSide,
-    RightSide,
-    Close,
-    Save,
-    Insert(InsertAt),
-    OpenLine(OpenLineAt),
-    NormalMode,
-    NewLine,
-    Tab,
-    Backspace,
-}
-
-/// Where insert mode puts the cursor.
-#[derive(Clone, Copy)]
-enum InsertAt {
-    /// Before the character under the cursor.
-    BeforeCursor,
-    /// After the character under the cursor.
-    AfterCursor,
-    /// At the first non-whitespace character on the line.
-    LineStart,
-    /// After the last character on the line.
-    LineEnd,
-}
-
-#[derive(Clone, Copy)]
-enum OpenLineAt {
-    Above,
-    Below,
-}
-
 /// Which keymap keys go to, as in vim.
 #[derive(Clone, Copy, PartialEq)]
 enum Mode {
     Normal,
     Insert,
-}
-
-fn normal_keymap() -> Keymap<Action> {
-    let key = |key| KeyboardShortcut::new(Modifiers::NONE, key);
-    let shift = |key| KeyboardShortcut::new(Modifiers::SHIFT, key);
-    let ctrl = |key| KeyboardShortcut::new(Modifiers::CTRL, key);
-    let command = |key| KeyboardShortcut::new(Modifiers::COMMAND, key);
-    Keymap::new([
-        (vec![key(Key::P)], Action::PrevChange),
-        (vec![shift(Key::F7)], Action::PrevChange),
-        (vec![key(Key::N)], Action::NextChange),
-        (vec![key(Key::F7)], Action::NextChange),
-        (vec![key(Key::Z), key(Key::B)], Action::CursorBottom),
-        (vec![key(Key::Z), key(Key::T)], Action::CursorTop),
-        (vec![key(Key::Z), key(Key::Z)], Action::CursorCenter),
-        (vec![key(Key::H)], Action::CharLeft),
-        (vec![key(Key::ArrowLeft)], Action::CharLeft),
-        (vec![key(Key::L)], Action::CharRight),
-        (vec![key(Key::ArrowRight)], Action::CharRight),
-        (vec![key(Key::J)], Action::LineDown),
-        (vec![key(Key::ArrowDown)], Action::LineDown),
-        (vec![key(Key::K)], Action::LineUp),
-        (vec![key(Key::ArrowUp)], Action::LineUp),
-        (vec![ctrl(Key::D)], Action::HalfPageDown),
-        (vec![ctrl(Key::U)], Action::HalfPageUp),
-        (vec![ctrl(Key::F)], Action::PageDown),
-        (vec![ctrl(Key::B)], Action::PageUp),
-        (vec![key(Key::G), key(Key::G)], Action::FirstLine),
-        (vec![shift(Key::G)], Action::LastLine),
-        (vec![shift(Key::Num6)], Action::LineStart),
-        (vec![shift(Key::Num4)], Action::LineEnd),
-        (vec![ctrl(Key::W), key(Key::H)], Action::LeftSide),
-        (vec![ctrl(Key::W), ctrl(Key::H)], Action::LeftSide),
-        (vec![ctrl(Key::W), key(Key::L)], Action::RightSide),
-        (vec![ctrl(Key::W), ctrl(Key::L)], Action::RightSide),
-        (vec![shift(Key::Z), shift(Key::Z)], Action::Close),
-        (vec![command(Key::S)], Action::Save),
-        (vec![key(Key::I)], Action::Insert(InsertAt::BeforeCursor)),
-        (vec![key(Key::A)], Action::Insert(InsertAt::AfterCursor)),
-        (vec![shift(Key::I)], Action::Insert(InsertAt::LineStart)),
-        (vec![shift(Key::A)], Action::Insert(InsertAt::LineEnd)),
-        (vec![shift(Key::O)], Action::OpenLine(OpenLineAt::Above)),
-        (vec![key(Key::O)], Action::OpenLine(OpenLineAt::Below)),
-    ])
-    .with_counts()
-}
-
-fn insert_keymap() -> Keymap<Action> {
-    let key = |key| KeyboardShortcut::new(Modifiers::NONE, key);
-    let command = |key| KeyboardShortcut::new(Modifiers::COMMAND, key);
-    Keymap::new([
-        (vec![key(Key::ArrowLeft)], Action::CharLeft),
-        (vec![key(Key::ArrowRight)], Action::CharRight),
-        (vec![key(Key::ArrowDown)], Action::LineDown),
-        (vec![key(Key::ArrowUp)], Action::LineUp),
-        (vec![key(Key::Escape)], Action::NormalMode),
-        (vec![key(Key::Enter)], Action::NewLine),
-        (vec![key(Key::Tab)], Action::Tab),
-        (vec![key(Key::Backspace)], Action::Backspace),
-        (vec![command(Key::S)], Action::Save),
-    ])
 }
 
 /// The file of one side of the diff.
@@ -1048,6 +935,7 @@ fn column_at(glyphs: &[Glyph], x: f32) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use eframe::egui::{Key, Modifiers};
     use egui_kittest::{Harness, kittest::Queryable as _};
 
     #[yare::parameterized(
