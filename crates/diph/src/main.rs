@@ -1,3 +1,4 @@
+mod app;
 mod cursor;
 mod keymap;
 mod menu;
@@ -10,15 +11,12 @@ use std::time::Instant;
 
 use anyhow::Context as _;
 use clap::{CommandFactory as _, Parser, error::ErrorKind};
-use diph_core::{Buffer, SideBySide, Theme};
+use diph_core::{Buffer, SideBySide};
 use eframe::egui;
 use winit::event_loop::{EventLoop, EventLoopProxy};
 
-use menu::{MenuAction, MenuBar};
+use app::App;
 use text_view::{SideFile, TextView};
-
-/// The key the name of the picked theme is saved under between runs.
-const THEME_KEY: &str = "theme";
 
 /// A side-by-side diff tool.
 ///
@@ -82,44 +80,6 @@ impl Args {
 /// file, even on Windows where no such file exists.
 fn is_null(path: &Path) -> bool {
     path == Path::new("/dev/null")
-}
-
-struct App {
-    view: TextView,
-    menu: MenuBar,
-}
-
-impl eframe::App for App {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        let ctx = ui.ctx().clone();
-        for action in self.menu.ui(ui) {
-            handle_menu_action(action, &ctx, &mut self.view);
-        }
-        self.view.show(ui);
-    }
-
-    fn persist_egui_memory(&self) -> bool {
-        // We use false here, because the scroll position will affect opening subsequent files.
-        // Initial diff is on line 1 of file_a. We open a diff for file_b and
-        // the first change is on line 400. When this data is stored file_b will scroll to line 400.
-        // Without persisting file_b will appear to open at line 400.
-        false
-    }
-
-    fn save(&mut self, storage: &mut dyn eframe::Storage) {
-        storage.set_string(THEME_KEY, self.view.theme().name().to_owned());
-    }
-}
-
-fn handle_menu_action(action: MenuAction, ctx: &egui::Context, view: &mut TextView) {
-    match action {
-        MenuAction::Save => view.save(),
-        MenuAction::Theme(name) => {
-            if let Some(theme) = Theme::named(&name) {
-                view.set_theme(ctx, theme);
-            }
-        }
-    }
 }
 
 fn read(path: &Path) -> anyhow::Result<Vec<u8>> {
@@ -194,7 +154,7 @@ fn main() -> anyhow::Result<()> {
         label: shown(&args.right, args.label(1)),
         save_path: save_file(&args.right, &right),
     };
-    let mut view = TextView::new(diff, left_file, right_file, started);
+    let view = TextView::new(diff, left_file, right_file, started);
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_inner_size([1400.0, 900.0]),
@@ -208,15 +168,13 @@ fn main() -> anyhow::Result<()> {
         Box::new(move |cc| {
             cc.egui_ctx
                 .send_viewport_cmd(egui::ViewportCommand::Title(format!("{name} — diph")));
-            let theme = cc
-                .storage
-                .and_then(|storage| storage.get_string(THEME_KEY))
-                .and_then(|name| Theme::named(&name))
-                .unwrap_or_default();
-            let menu = MenuBar::new(theme.name(), wake_event_loop(proxy));
-            view.set_theme(&cc.egui_ctx, theme);
-            view.highlight_in_background(paths, cc.egui_ctx.clone());
-            Ok(Box::new(App { view, menu }))
+            Ok(Box::new(App::new(
+                view,
+                paths,
+                cc.storage,
+                &cc.egui_ctx,
+                wake_event_loop(proxy),
+            )))
         }),
         &event_loop,
     );
