@@ -42,14 +42,11 @@ impl MenuBar {
         let picked: Vec<_> = self
             .events
             .try_iter()
-            .filter_map(|event| {
-                if event.id == "save" {
-                    Some(MenuAction::Save)
-                } else {
-                    Theme::names()
-                        .find(|&name| event.id == name)
-                        .map(|name| MenuAction::Theme(name.to_owned()))
-                }
+            .filter_map(|event| match event.id.0.as_str() {
+                "save" => Some(MenuAction::Save),
+                id => Theme::names()
+                    .find(|&name| name == id)
+                    .map(|name| MenuAction::Theme(name.to_owned())),
             })
             .collect();
         picked

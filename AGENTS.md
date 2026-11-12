@@ -44,6 +44,9 @@ crate descriptions, and `--help` text: describe what the code does now.
 
 - Before writing an algorithm by hand, check whether an existing
   dependency already provides it.
+- Keep one canonical construction path: integrate new state into existing
+  initialization instead of adding parallel state, setters, or post-construction
+  setup.
 - Name fields after what they hold (`deleted_words`, not `old_changed`).
 - Use a struct with named fields, not a tuple, for data that is stored,
   sent between threads, or given a type alias. Keep tuples for values

@@ -2,6 +2,13 @@
 
 use eframe::egui::{Event, Key, KeyboardShortcut, Modifiers};
 
+#[cfg(target_os = "macos")]
+#[path = "keymap/macos.rs"]
+mod platform;
+#[cfg(not(target_os = "macos"))]
+#[path = "keymap/other.rs"]
+mod platform;
+
 /// The digit keys, in order from 0.
 const DIGITS: [Key; 10] = [
     Key::Num0,
@@ -85,7 +92,6 @@ pub(crate) fn normal_keymap() -> Keymap<Action> {
     let key = |key| KeyboardShortcut::new(Modifiers::NONE, key);
     let shift = |key| KeyboardShortcut::new(Modifiers::SHIFT, key);
     let ctrl = |key| KeyboardShortcut::new(Modifiers::CTRL, key);
-    let command = |key| KeyboardShortcut::new(Modifiers::COMMAND, key);
     Keymap::new([
         (vec![key(Key::P)], Action::PrevChange),
         (vec![shift(Key::F7)], Action::PrevChange),
@@ -115,7 +121,7 @@ pub(crate) fn normal_keymap() -> Keymap<Action> {
         (vec![ctrl(Key::W), key(Key::L)], Action::RightSide),
         (vec![ctrl(Key::W), ctrl(Key::L)], Action::RightSide),
         (vec![shift(Key::Z), shift(Key::Z)], Action::Close),
-        (vec![command(Key::S)], Action::Save),
+        (vec![platform::save_shortcut()], Action::Save),
         (vec![key(Key::I)], Action::Insert(InsertAt::BeforeCursor)),
         (vec![key(Key::A)], Action::Insert(InsertAt::AfterCursor)),
         (vec![shift(Key::I)], Action::Insert(InsertAt::LineStart)),
@@ -128,7 +134,6 @@ pub(crate) fn normal_keymap() -> Keymap<Action> {
 
 pub(crate) fn insert_keymap() -> Keymap<Action> {
     let key = |key| KeyboardShortcut::new(Modifiers::NONE, key);
-    let command = |key| KeyboardShortcut::new(Modifiers::COMMAND, key);
     Keymap::new([
         (vec![key(Key::ArrowLeft)], Action::CharLeft),
         (vec![key(Key::ArrowRight)], Action::CharRight),
@@ -138,7 +143,7 @@ pub(crate) fn insert_keymap() -> Keymap<Action> {
         (vec![key(Key::Enter)], Action::NewLine),
         (vec![key(Key::Tab)], Action::Tab),
         (vec![key(Key::Backspace)], Action::Backspace),
-        (vec![command(Key::S)], Action::Save),
+        (vec![platform::save_shortcut()], Action::Save),
     ])
 }
 
