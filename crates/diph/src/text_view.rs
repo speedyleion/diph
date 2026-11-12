@@ -55,20 +55,15 @@ enum Mode {
     Insert,
 }
 
-/// The file of one side of the diff.
-pub struct SideFile {
-    /// The name shown above the side.
-    pub label: PathBuf,
-    /// Where the side saves to; none when it can't be saved.
-    pub save_path: Option<PathBuf>,
+pub(crate) struct SaveRequest {
+    pub(crate) side: usize,
+    pub(crate) text: String,
 }
 
 pub struct TextView {
     diff: SideBySide,
-    /// The file of the left and right side.
-    files: [SideFile; 2],
-    /// What the last save did, shown in the status bar.
-    save_message: Option<String>,
+    labels: [PathBuf; 2],
+    pending_save: Option<SaveRequest>,
     /// Index into `diff.changes()` of the change last jumped to.
     current_change: Option<usize>,
     /// Row to scroll to the top of the view on the next frame.
@@ -113,9 +108,8 @@ pub struct TextView {
 }
 
 impl TextView {
-    /// A view of `diff` whose status bar shows the time from `started` to
-    /// the first frame.
-    pub fn new(diff: SideBySide, left: SideFile, right: SideFile, started: Instant) -> Self {
+    /// A view of `diff` with the names shown above each side.
+    pub fn new(diff: SideBySide, labels: [PathBuf; 2], started: Instant) -> Self {
         let buffers = diff.buffers();
         // The right side, unless only the left has lines.
         let cursor_side = [1, 0].into_iter().find(|&s| !buffers[s].lines().is_empty());
@@ -124,8 +118,8 @@ impl TextView {
             cursor_side,
             cursor: Cursor::default(),
             diff,
-            files: [left, right],
-            save_message: None,
+            labels,
+            pending_save: None,
             current_change: None,
             scroll_to_top_row: None,
             top_row: 0,
@@ -199,7 +193,7 @@ impl TextView {
         self.rehighlight(1);
     }
 
-    pub fn show(&mut self, ui: &mut egui::Ui) {
+    pub fn show(&mut self, ui: &mut egui::Ui, save_message: Option<&str>) {
         let started = self.started;
         let startup_time = *self.startup_time.get_or_insert_with(|| started.elapsed());
         if let Some(rx) = &self.colors_rx {
@@ -244,10 +238,10 @@ impl TextView {
                 ui.label(format!("change {current} of {}", self.diff.changes().len()));
             });
             ui.columns(2, |cols| {
-                for (column, file) in cols.iter_mut().zip(&self.files) {
+                for (column, label) in cols.iter_mut().zip(&self.labels) {
                     let font = TextStyle::Monospace.resolve(column.style());
                     let char_width = column.fonts_mut(|f| f.glyph_width(&font, '0'));
-                    let label = truncate_label(&file.label, column.available_width(), char_width);
+                    let label = truncate_label(label, column.available_width(), char_width);
                     column.monospace(label);
                 }
             });
@@ -257,7 +251,7 @@ impl TextView {
                 if self.mode == Mode::Insert {
                     ui.strong("-- INSERT --");
                 }
-                if let Some(message) = &self.save_message {
+                if let Some(message) = save_message {
                     ui.label(message);
                 }
                 ui.weak(format!("started in {} ms", startup_time.as_millis()));
@@ -347,7 +341,7 @@ impl TextView {
             Action::LeftSide => self.switch_side(0),
             Action::RightSide => self.switch_side(1),
             Action::Close => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
-            Action::Save => self.save(),
+            Action::Save => self.request_save(),
             Action::Insert(at) => self.insert(at),
             Action::OpenLine(at) => self.open_line(at),
             Action::NormalMode => self.leave_insert(),
@@ -367,19 +361,20 @@ impl TextView {
         edit
     }
 
-    /// Writes the text of the side with the cursor to its file.
-    pub(crate) fn save(&mut self) {
-        let Some(side) = self.cursor_side else {
-            return;
-        };
-        let SideFile { label, save_path } = &self.files[side];
-        self.save_message = Some(match save_path {
-            None => format!("{} can't be saved", label.display()),
-            Some(file) => match std::fs::write(file, self.diff.buffers()[side].text()) {
-                Ok(()) => format!("saved {}", file.display()),
-                Err(e) => format!("couldn't save {}: {e}", file.display()),
-            },
-        });
+    pub(crate) fn save_request(&self) -> Option<SaveRequest> {
+        let side = self.cursor_side?;
+        Some(SaveRequest {
+            side,
+            text: self.diff.buffers()[side].text(),
+        })
+    }
+
+    fn request_save(&mut self) {
+        self.pending_save = self.save_request();
+    }
+
+    pub(crate) fn take_save_request(&mut self) -> Option<SaveRequest> {
+        self.pending_save.take()
     }
 
     /// Inserts `text` at the cursor and moves the cursor past it.
@@ -965,21 +960,14 @@ mod tests {
             .replace("line 25\n", "line twenty-five\n");
         TextView::new(
             SideBySide::new([Buffer::new(&left), Buffer::new(&right)]),
-            SideFile {
-                label: "left".into(),
-                save_path: None,
-            },
-            SideFile {
-                label: "right".into(),
-                save_path: None,
-            },
+            ["left".into(), "right".into()],
             Instant::now(),
         )
     }
 
     #[test]
     fn keys_step_through_changes_and_stop_at_the_ends() {
-        let mut harness = Harness::new_ui_state(|ui, view| view.show(ui), three_changes());
+        let mut harness = Harness::new_ui_state(|ui, view| view.show(ui, None), three_changes());
         harness.run();
         harness.get_by_label("change 1 of 3");
 
@@ -1002,7 +990,7 @@ mod tests {
     /// `keys` are separated by spaces, each a character, uppercase with
     /// Shift, a key name such as `Down`, or either with `C-` for Ctrl.
     fn typed_in_unchanged_file(keys: &str) -> Harness<'static, TextView> {
-        let mut harness = Harness::new_ui_state(|ui, view| view.show(ui), unchanged_file());
+        let mut harness = Harness::new_ui_state(|ui, view| view.show(ui, None), unchanged_file());
         harness.run();
         press(&mut harness, keys);
         harness
@@ -1012,18 +1000,7 @@ mod tests {
     fn unchanged_file() -> TextView {
         let text: String = (0..200).map(|i| format!("line {i}\n")).collect();
         let diff = SideBySide::new([Buffer::new(&text), Buffer::new(&text)]);
-        TextView::new(
-            diff,
-            SideFile {
-                label: "left".into(),
-                save_path: None,
-            },
-            SideFile {
-                label: "right".into(),
-                save_path: None,
-            },
-            Instant::now(),
-        )
+        TextView::new(diff, ["left".into(), "right".into()], Instant::now())
     }
 
     /// Presses `keys`, in [`typed_in_unchanged_file`]'s notation, one per
@@ -1244,7 +1221,7 @@ mod tests {
 
     #[test]
     fn stepping_to_a_change_moves_the_cursor_to_it() {
-        let mut harness = Harness::new_ui_state(|ui, view| view.show(ui), three_changes());
+        let mut harness = Harness::new_ui_state(|ui, view| view.show(ui, None), three_changes());
         harness.run();
         harness.key_press(Key::N);
         harness.run();
@@ -1270,14 +1247,7 @@ mod tests {
         let buffers = [Buffer::new(left), Buffer::new(right)];
         let view = TextView::new(
             SideBySide::new(buffers),
-            SideFile {
-                label: "left".into(),
-                save_path: None,
-            },
-            SideFile {
-                label: "right".into(),
-                save_path: None,
-            },
+            ["left".into(), "right".into()],
             Instant::now(),
         );
         assert_eq!(view.cursor_side, side);
@@ -1324,7 +1294,7 @@ mod tests {
 
     #[test]
     fn shift_zz_closes_the_window() {
-        let mut harness = Harness::new_ui_state(|ui, view| view.show(ui), three_changes());
+        let mut harness = Harness::new_ui_state(|ui, view| view.show(ui, None), three_changes());
         harness.run();
         harness.key_press_modifiers(Modifiers::SHIFT, Key::Z);
         harness.run();
@@ -1434,7 +1404,7 @@ mod tests {
     fn typing_keeps_the_colors_of_the_text_it_moves() {
         let mut view = unchanged_file();
         view.colors[1] = colors_per_character(&view.diff.buffers()[1]);
-        let mut harness = Harness::new_ui_state(|ui, view| view.show(ui), view);
+        let mut harness = Harness::new_ui_state(|ui, view| view.show(ui, None), view);
         harness.run();
         press(&mut harness, "l i Enter");
         let lines = &harness.state().colors[1].lines;
@@ -1448,7 +1418,7 @@ mod tests {
         view.colors[1] = colors_per_character(&view.diff.buffers()[1]);
         let (tx, rx) = channel();
         view.colors_rx = Some(rx);
-        let mut harness = Harness::new_ui_state(|ui, view| view.show(ui), view);
+        let mut harness = Harness::new_ui_state(|ui, view| view.show(ui, None), view);
         harness.run();
         press(&mut harness, "i x");
         tx.send(ColorsChunk {
@@ -1483,7 +1453,7 @@ mod tests {
         let mut view = unchanged_file();
         let (tx, rx) = channel();
         view.colors_rx = Some(rx);
-        let mut harness = Harness::new_ui_state(|ui, view| view.show(ui), view);
+        let mut harness = Harness::new_ui_state(|ui, view| view.show(ui, None), view);
         harness.run();
         press(&mut harness, "i x");
         let lines = vec![Vec::new(); 200];
@@ -1502,7 +1472,7 @@ mod tests {
         let mut view = unchanged_file();
         let (tx, rx) = channel();
         view.colors_rx = Some(rx);
-        let mut harness = Harness::new_ui_state(|ui, view| view.show(ui), view);
+        let mut harness = Harness::new_ui_state(|ui, view| view.show(ui, None), view);
         harness.run();
         let ctx = harness.ctx.clone();
         harness
@@ -1519,6 +1489,34 @@ mod tests {
         assert!(harness.state().colors[1].lines.is_empty());
     }
 
+    fn saving_view(files: [crate::app::SideFile; 2]) -> Harness<'static, TextView> {
+        let mut save_message = None;
+        Harness::new_ui_state(
+            move |ui, view| {
+                view.show(ui, save_message.as_deref());
+                crate::app::handle_save_request(
+                    &files,
+                    &mut save_message,
+                    view.take_save_request(),
+                );
+            },
+            unchanged_file(),
+        )
+    }
+
+    fn side_files(right_save_path: Option<PathBuf>) -> [crate::app::SideFile; 2] {
+        [
+            crate::app::SideFile {
+                label: "left".into(),
+                save_path: None,
+            },
+            crate::app::SideFile {
+                label: "right".into(),
+                save_path: right_save_path,
+            },
+        ]
+    }
+
     #[yare::parameterized(
         in_normal_mode = { "i x Escape C-s" },
         in_insert_mode = { "i x C-s" },
@@ -1526,9 +1524,7 @@ mod tests {
     fn ctrl_s_saves_the_side_with_the_cursor(keys: &str) {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("right.txt");
-        let mut view = unchanged_file();
-        view.files[1].save_path = Some(file.clone());
-        let mut harness = Harness::new_ui_state(|ui, view| view.show(ui), view);
+        let mut harness = saving_view(side_files(Some(file.clone())));
         harness.run();
         press(&mut harness, keys);
         let lines: String = (0..200).map(|i| format!("line {i}\n")).collect();
@@ -1542,11 +1538,11 @@ mod tests {
     )]
     fn the_status_bar_shows_what_saving_did(file: Option<&str>, message: &str) {
         let dir = tempfile::tempdir().unwrap();
-        let mut view = unchanged_file();
-        view.files[1].save_path = file.map(|f| dir.path().join(f));
-        let mut harness = Harness::new_ui_state(|ui, view| view.show(ui), view);
+        let save_path = file.map(|f| dir.path().join(f));
+        let mut harness = saving_view(side_files(save_path));
         harness.run();
         press(&mut harness, "C-s");
+        harness.run();
         harness.get_by_label_contains(message);
     }
 }
