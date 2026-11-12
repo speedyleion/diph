@@ -1,9 +1,11 @@
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use diph_core::Theme;
 use eframe::egui;
 
 use crate::menu::{MenuAction, MenuBar};
+use crate::palette::Palette;
 use crate::text_view::{SaveRequest, TextView};
 
 pub(crate) struct SideFile {
@@ -20,7 +22,10 @@ pub(crate) struct App {
     view: TextView,
     files: [SideFile; 2],
     menu: MenuBar,
+    theme: &'static str,
     save_message: Option<String>,
+    started: Instant,
+    startup_time: Option<Duration>,
 }
 
 impl App {
@@ -28,6 +33,7 @@ impl App {
         mut view: TextView,
         files: [SideFile; 2],
         paths: [PathBuf; 2],
+        started: Instant,
         storage: Option<&dyn eframe::Storage>,
         ctx: &egui::Context,
         wake: impl Fn() + Send + Sync + 'static,
@@ -36,14 +42,19 @@ impl App {
             .and_then(|storage| storage.get_string(THEME_KEY))
             .and_then(|name| Theme::named(&name))
             .unwrap_or_default();
-        let menu = MenuBar::new(theme.name(), wake);
-        view.set_theme(ctx, theme);
+        let theme_name = theme.name();
+        let menu = MenuBar::new(theme_name, wake);
+        Palette::new(&theme).apply(ctx);
+        view.set_theme(theme);
         view.highlight_in_background(paths, ctx.clone());
         Self {
             view,
             files,
             menu,
+            theme: theme_name,
             save_message: None,
+            started,
+            startup_time: None,
         }
     }
 }
@@ -58,13 +69,23 @@ impl eframe::App for App {
                 &mut self.view,
                 &self.files,
                 &mut self.save_message,
+                &mut self.theme,
             );
         }
-        self.view.show(ui, self.save_message.as_deref());
+        self.view.process_input(ui);
         if let Some(request) = self.view.take_save_request() {
             handle_save_request(&self.files, &mut self.save_message, Some(request));
-            ctx.request_repaint();
         }
+        let started = self.started;
+        let startup_time = *self.startup_time.get_or_insert_with(|| started.elapsed());
+        self.view.show_header(ui);
+        show_status(
+            ui,
+            self.view.is_insert_mode(),
+            self.save_message.as_deref(),
+            startup_time,
+        );
+        self.view.show_diff(ui);
     }
 
     fn persist_egui_memory(&self) -> bool {
@@ -76,7 +97,7 @@ impl eframe::App for App {
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
-        storage.set_string(THEME_KEY, self.view.theme().name().to_owned());
+        save_theme(storage, self.theme);
     }
 }
 
@@ -86,12 +107,15 @@ fn handle_menu_action(
     view: &mut TextView,
     files: &[SideFile; 2],
     save_message: &mut Option<String>,
+    selected_theme: &mut &'static str,
 ) {
     match action {
         MenuAction::Save => handle_save_request(files, save_message, view.save_request()),
         MenuAction::Theme(name) => {
             if let Some(theme) = Theme::named(&name) {
-                view.set_theme(ctx, theme);
+                *selected_theme = theme.name();
+                Palette::new(&theme).apply(ctx);
+                view.set_theme(theme);
             }
         }
     }
@@ -115,24 +139,50 @@ pub(crate) fn handle_save_request(
     });
 }
 
+fn show_status(
+    ui: &mut egui::Ui,
+    insert_mode: bool,
+    save_message: Option<&str>,
+    startup_time: Duration,
+) {
+    egui::Panel::bottom("status_bar").show(ui, |ui| {
+        ui.horizontal(|ui| {
+            if insert_mode {
+                ui.strong("-- INSERT --");
+            }
+            if let Some(message) = save_message {
+                ui.label(message);
+            }
+            ui.weak(format!("started in {} ms", startup_time.as_millis()));
+        });
+    });
+}
+
+fn save_theme(storage: &mut dyn eframe::Storage, theme: &str) {
+    storage.set_string(THEME_KEY, theme.to_owned());
+}
+
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::path::PathBuf;
-    use std::time::Instant;
+    use std::time::Duration;
 
     use diph_core::{Buffer, SideBySide, Theme};
+    use eframe::Storage as _;
     use eframe::egui;
+    use egui_kittest::{Harness, kittest::Queryable as _};
 
     use crate::menu::MenuAction;
+    use crate::palette::Palette;
     use crate::text_view::{SaveRequest, TextView};
 
-    use super::{SideFile, handle_menu_action, handle_save_request};
+    use super::{SideFile, handle_menu_action, handle_save_request, save_theme, show_status};
 
     fn test_view() -> TextView {
         TextView::new(
             SideBySide::new([Buffer::new("left\n"), Buffer::new("right\n")]),
             [PathBuf::from("left.rs"), PathBuf::from("right.rs")],
-            Instant::now(),
         )
     }
 
@@ -150,12 +200,14 @@ mod tests {
     }
 
     #[test]
-    fn theme_menu_action_updates_the_view() {
+    fn theme_menu_action_updates_app_and_view_theme_state() {
         let mut view = test_view();
         let name = Theme::names()
             .find(|&name| name != Theme::default().name())
             .expect("there is more than one theme");
+        let expected_background = Palette::new(&Theme::named(name).unwrap()).background;
         let ctx = egui::Context::default();
+        let mut selected_theme = Theme::default().name();
 
         let files = test_files(None);
         let mut save_message = None;
@@ -165,9 +217,33 @@ mod tests {
             &mut view,
             &files,
             &mut save_message,
+            &mut selected_theme,
         );
 
-        assert_eq!(view.theme().name(), name);
+        assert_eq!(selected_theme, name);
+        let egui_theme = if expected_background.intensity() < 0.5 {
+            egui::Theme::Dark
+        } else {
+            egui::Theme::Light
+        };
+        assert_eq!(
+            ctx.style_of(egui_theme).visuals.panel_fill,
+            expected_background
+        );
+    }
+
+    #[test]
+    fn status_bar_shows_mode_feedback_and_startup_time() {
+        let mut harness = Harness::new_ui_state(
+            |ui, ()| show_status(ui, true, Some("saved right.rs"), Duration::from_millis(12)),
+            (),
+        );
+
+        harness.run();
+
+        harness.get_by_label("-- INSERT --");
+        harness.get_by_label("saved right.rs");
+        harness.get_by_label("started in 12 ms");
     }
 
     #[test]
@@ -235,6 +311,7 @@ mod tests {
         let files = test_files(Some(file.clone()));
         let mut view = test_view();
         let mut save_message = None;
+        let mut selected_theme = Theme::default().name();
 
         handle_menu_action(
             MenuAction::Save,
@@ -242,6 +319,7 @@ mod tests {
             &mut view,
             &files,
             &mut save_message,
+            &mut selected_theme,
         );
 
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "right\n");

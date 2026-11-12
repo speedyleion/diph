@@ -5,7 +5,6 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, OnceLock};
-use std::time::{Duration, Instant};
 
 use diph_core::{
     Buffer, Edit, Highlighter, Line, Position, Row, RowKind, SideBySide, SideColors, Span, Theme,
@@ -101,15 +100,11 @@ pub struct TextView {
     theme: Arc<Theme>,
     /// The colors of `theme` the view paints with.
     palette: Palette,
-    /// When diph started.
-    started: Instant,
-    /// Time from `started` to the first frame.
-    startup_time: Option<Duration>,
 }
 
 impl TextView {
     /// A view of `diff` with the names shown above each side.
-    pub fn new(diff: SideBySide, labels: [PathBuf; 2], started: Instant) -> Self {
+    pub fn new(diff: SideBySide, labels: [PathBuf; 2]) -> Self {
         let buffers = diff.buffers();
         // The right side, unless only the left has lines.
         let cursor_side = [1, 0].into_iter().find(|&s| !buffers[s].lines().is_empty());
@@ -135,8 +130,6 @@ impl TextView {
             highlighting: None,
             palette: Palette::new(&theme),
             theme: Arc::new(theme),
-            started,
-            startup_time: None,
         };
         view.step_change(1);
         view
@@ -179,44 +172,26 @@ impl TextView {
         self.highlight(side);
     }
 
-    pub fn theme(&self) -> &Theme {
-        &self.theme
-    }
-
-    /// Paints the view and egui's panels and menus in `theme`'s colors, and
-    /// highlights both sides in it again.
-    pub fn set_theme(&mut self, ctx: &egui::Context, theme: Theme) {
+    /// Highlights both sides again and paints the view in `theme`'s colors.
+    pub(crate) fn set_theme(&mut self, theme: Theme) {
         self.palette = Palette::new(&theme);
-        self.palette.apply(ctx);
         self.theme = Arc::new(theme);
         self.rehighlight(0);
         self.rehighlight(1);
     }
 
-    pub fn show(&mut self, ui: &mut egui::Ui, save_message: Option<&str>) {
-        let started = self.started;
-        let startup_time = *self.startup_time.get_or_insert_with(|| started.elapsed());
-        if let Some(rx) = &self.colors_rx {
-            for chunk in rx.try_iter() {
-                let side = chunk.side;
-                if chunk.run != self.highlight_runs[side].load(Ordering::Relaxed) {
-                    continue;
-                }
-                // Replaces the colors from before the last edit.
-                let colors = &mut self.colors[side].lines;
-                let start = self.colors_received[side];
-                let end = (start + chunk.lines.len()).min(colors.len());
-                self.colors_received[side] += chunk.lines.len();
-                colors.splice(start..end, chunk.lines);
-            }
-        }
-        // One event at a time, so a key that switches modes sends the keys
-        // and text after it to the other mode.
+    pub(crate) fn is_insert_mode(&self) -> bool {
+        self.mode == Mode::Insert
+    }
+
+    pub(crate) fn process_input(&mut self, ui: &mut egui::Ui) {
         let events = ui.input(|i| i.events.clone());
         for event in &events {
             self.handle(ui.ctx(), event);
         }
+    }
 
+    pub(crate) fn show_header(&mut self, ui: &mut egui::Ui) {
         egui::Panel::top("text_header").show(ui, |ui| {
             ui.horizontal(|ui| {
                 // Without keyboard focus, which Tab would give and Space or
@@ -246,17 +221,23 @@ impl TextView {
                 }
             });
         });
-        egui::Panel::bottom("status_bar").show(ui, |ui| {
-            ui.horizontal(|ui| {
-                if self.mode == Mode::Insert {
-                    ui.strong("-- INSERT --");
+    }
+
+    pub(crate) fn show_diff(&mut self, ui: &mut egui::Ui) {
+        if let Some(rx) = &self.colors_rx {
+            for chunk in rx.try_iter() {
+                let side = chunk.side;
+                if chunk.run != self.highlight_runs[side].load(Ordering::Relaxed) {
+                    continue;
                 }
-                if let Some(message) = save_message {
-                    ui.label(message);
-                }
-                ui.weak(format!("started in {} ms", startup_time.as_millis()));
-            });
-        });
+                // Replaces the colors from before the last edit.
+                let colors = &mut self.colors[side].lines;
+                let start = self.colors_received[side];
+                let end = (start + chunk.lines.len()).min(colors.len());
+                self.colors_received[side] += chunk.lines.len();
+                colors.splice(start..end, chunk.lines);
+            }
+        }
         egui::CentralPanel::default().show(ui, |ui| self.diff_ui(ui));
     }
 
@@ -933,6 +914,12 @@ mod tests {
     use eframe::egui::{Key, Modifiers};
     use egui_kittest::{Harness, kittest::Queryable as _};
 
+    fn show_view(ui: &mut egui::Ui, view: &mut TextView) {
+        view.process_input(ui);
+        view.show_header(ui);
+        view.show_diff(ui);
+    }
+
     #[yare::parameterized(
         full_label_fits_at_its_boundary = { "src/main.rs", 11, "src/main.rs" },
         full_label_falls_back_to_tail_at_its_boundary = { "src/main.rs", 10, "...main.rs" },
@@ -961,13 +948,12 @@ mod tests {
         TextView::new(
             SideBySide::new([Buffer::new(&left), Buffer::new(&right)]),
             ["left".into(), "right".into()],
-            Instant::now(),
         )
     }
 
     #[test]
     fn keys_step_through_changes_and_stop_at_the_ends() {
-        let mut harness = Harness::new_ui_state(|ui, view| view.show(ui, None), three_changes());
+        let mut harness = Harness::new_ui_state(show_view, three_changes());
         harness.run();
         harness.get_by_label("change 1 of 3");
 
@@ -990,7 +976,7 @@ mod tests {
     /// `keys` are separated by spaces, each a character, uppercase with
     /// Shift, a key name such as `Down`, or either with `C-` for Ctrl.
     fn typed_in_unchanged_file(keys: &str) -> Harness<'static, TextView> {
-        let mut harness = Harness::new_ui_state(|ui, view| view.show(ui, None), unchanged_file());
+        let mut harness = Harness::new_ui_state(show_view, unchanged_file());
         harness.run();
         press(&mut harness, keys);
         harness
@@ -1000,7 +986,7 @@ mod tests {
     fn unchanged_file() -> TextView {
         let text: String = (0..200).map(|i| format!("line {i}\n")).collect();
         let diff = SideBySide::new([Buffer::new(&text), Buffer::new(&text)]);
-        TextView::new(diff, ["left".into(), "right".into()], Instant::now())
+        TextView::new(diff, ["left".into(), "right".into()])
     }
 
     /// Presses `keys`, in [`typed_in_unchanged_file`]'s notation, one per
@@ -1221,7 +1207,7 @@ mod tests {
 
     #[test]
     fn stepping_to_a_change_moves_the_cursor_to_it() {
-        let mut harness = Harness::new_ui_state(|ui, view| view.show(ui, None), three_changes());
+        let mut harness = Harness::new_ui_state(show_view, three_changes());
         harness.run();
         harness.key_press(Key::N);
         harness.run();
@@ -1245,11 +1231,7 @@ mod tests {
     )]
     fn the_cursor_starts(left: &str, right: &str, side: Option<usize>) {
         let buffers = [Buffer::new(left), Buffer::new(right)];
-        let view = TextView::new(
-            SideBySide::new(buffers),
-            ["left".into(), "right".into()],
-            Instant::now(),
-        );
+        let view = TextView::new(SideBySide::new(buffers), ["left".into(), "right".into()]);
         assert_eq!(view.cursor_side, side);
     }
 
@@ -1294,7 +1276,7 @@ mod tests {
 
     #[test]
     fn shift_zz_closes_the_window() {
-        let mut harness = Harness::new_ui_state(|ui, view| view.show(ui, None), three_changes());
+        let mut harness = Harness::new_ui_state(show_view, three_changes());
         harness.run();
         harness.key_press_modifiers(Modifiers::SHIFT, Key::Z);
         harness.run();
@@ -1360,9 +1342,9 @@ mod tests {
         not_after_escape = { "i Escape", false },
         not_before_i = { "", false },
     )]
-    fn the_status_bar_shows_insert_mode(keys: &str, shown: bool) {
+    fn insert_mode_state_is_exposed_to_the_app(keys: &str, insert_mode: bool) {
         let harness = typed_in_unchanged_file(keys);
-        assert_eq!(harness.query_by_label("-- INSERT --").is_some(), shown);
+        assert_eq!(harness.state().is_insert_mode(), insert_mode);
     }
 
     #[yare::parameterized(
@@ -1404,7 +1386,7 @@ mod tests {
     fn typing_keeps_the_colors_of_the_text_it_moves() {
         let mut view = unchanged_file();
         view.colors[1] = colors_per_character(&view.diff.buffers()[1]);
-        let mut harness = Harness::new_ui_state(|ui, view| view.show(ui, None), view);
+        let mut harness = Harness::new_ui_state(show_view, view);
         harness.run();
         press(&mut harness, "l i Enter");
         let lines = &harness.state().colors[1].lines;
@@ -1418,7 +1400,7 @@ mod tests {
         view.colors[1] = colors_per_character(&view.diff.buffers()[1]);
         let (tx, rx) = channel();
         view.colors_rx = Some(rx);
-        let mut harness = Harness::new_ui_state(|ui, view| view.show(ui, None), view);
+        let mut harness = Harness::new_ui_state(show_view, view);
         harness.run();
         press(&mut harness, "i x");
         tx.send(ColorsChunk {
@@ -1453,7 +1435,7 @@ mod tests {
         let mut view = unchanged_file();
         let (tx, rx) = channel();
         view.colors_rx = Some(rx);
-        let mut harness = Harness::new_ui_state(|ui, view| view.show(ui, None), view);
+        let mut harness = Harness::new_ui_state(show_view, view);
         harness.run();
         press(&mut harness, "i x");
         let lines = vec![Vec::new(); 200];
@@ -1472,12 +1454,9 @@ mod tests {
         let mut view = unchanged_file();
         let (tx, rx) = channel();
         view.colors_rx = Some(rx);
-        let mut harness = Harness::new_ui_state(|ui, view| view.show(ui, None), view);
+        let mut harness = Harness::new_ui_state(show_view, view);
         harness.run();
-        let ctx = harness.ctx.clone();
-        harness
-            .state_mut()
-            .set_theme(&ctx, Theme::named("Nord").unwrap());
+        harness.state_mut().set_theme(Theme::named("Nord").unwrap());
         let lines = vec![Vec::new(); 200];
         tx.send(ColorsChunk {
             side: 1,
@@ -1493,12 +1472,14 @@ mod tests {
         let mut save_message = None;
         Harness::new_ui_state(
             move |ui, view| {
-                view.show(ui, save_message.as_deref());
+                view.process_input(ui);
+                view.show_header(ui);
                 crate::app::handle_save_request(
                     &files,
                     &mut save_message,
                     view.take_save_request(),
                 );
+                view.show_diff(ui);
             },
             unchanged_file(),
         )
@@ -1529,20 +1510,5 @@ mod tests {
         press(&mut harness, keys);
         let lines: String = (0..200).map(|i| format!("line {i}\n")).collect();
         assert_eq!(std::fs::read_to_string(&file).unwrap(), format!("x{lines}"));
-    }
-
-    #[yare::parameterized(
-        a_save = { Some("right.txt"), "saved " },
-        a_side_without_a_file = { None, "right can't be saved" },
-        a_failed_save = { Some("missing/right.txt"), "couldn't save " },
-    )]
-    fn the_status_bar_shows_what_saving_did(file: Option<&str>, message: &str) {
-        let dir = tempfile::tempdir().unwrap();
-        let save_path = file.map(|f| dir.path().join(f));
-        let mut harness = saving_view(side_files(save_path));
-        harness.run();
-        press(&mut harness, "C-s");
-        harness.run();
-        harness.get_by_label_contains(message);
     }
 }
