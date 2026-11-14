@@ -1,4 +1,5 @@
 mod app;
+mod comment;
 mod cursor;
 mod keymap;
 mod menu;

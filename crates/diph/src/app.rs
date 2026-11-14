@@ -138,7 +138,7 @@ impl eframe::App for App {
             .show_header(ui, [&self.files[0].label, &self.files[1].label]);
         show_status(
             ui,
-            self.view.is_insert_mode(),
+            self.view.mode_label(),
             self.save_message.as_deref(),
             startup_time,
         );
@@ -232,14 +232,14 @@ fn handle_save_target(
 
 fn show_status(
     ui: &mut egui::Ui,
-    insert_mode: bool,
+    mode_label: Option<&str>,
     save_message: Option<&str>,
     startup_time: Duration,
 ) {
     egui::Panel::bottom("status_bar").show(ui, |ui| {
         ui.horizontal(|ui| {
-            if insert_mode {
-                ui.strong("-- INSERT --");
+            if let Some(label) = mode_label {
+                ui.strong(label);
             }
             if let Some(message) = save_message {
                 ui.label(message);
@@ -353,7 +353,14 @@ mod tests {
     #[test]
     fn status_bar_shows_mode_feedback_and_startup_time() {
         let mut harness = Harness::new_ui_state(
-            |ui, ()| show_status(ui, true, Some("saved right.rs"), Duration::from_millis(12)),
+            |ui, ()| {
+                show_status(
+                    ui,
+                    Some("-- INSERT --"),
+                    Some("saved right.rs"),
+                    Duration::from_millis(12),
+                )
+            },
             (),
         );
 

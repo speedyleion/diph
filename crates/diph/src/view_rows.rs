@@ -13,15 +13,16 @@ pub(crate) struct Gap {
 pub(crate) enum ViewRow {
     /// A row of the diff.
     Diff(usize),
-    /// A row of the gap after a row of the diff.
-    Gap { after: usize },
+    /// Row `row` of `gap`, counting from 0.
+    Gap { gap: Gap, row: usize },
 }
 
 impl ViewRow {
     /// The row of the diff shown, or the one the gap follows.
     pub(crate) fn diff_row(self) -> usize {
         match self {
-            Self::Diff(row) | Self::Gap { after: row } => row,
+            Self::Diff(row) => row,
+            Self::Gap { gap, .. } => gap.after,
         }
     }
 }
@@ -59,7 +60,10 @@ impl ViewRows {
             }
             rest -= rows_before_gap;
             if rest < gap.rows {
-                return ViewRow::Gap { after: gap.after };
+                return ViewRow::Gap {
+                    gap: *gap,
+                    row: rest,
+                };
             }
             rest -= gap.rows;
             diff_row = gap.after + 1;
@@ -75,8 +79,7 @@ mod tests {
     /// Ten rows of the diff, with two blank rows after row 2 and three after
     /// row 5.
     fn with_gaps() -> ViewRows {
-        let gaps = vec![Gap { after: 2, rows: 2 }, Gap { after: 5, rows: 3 }];
-        ViewRows::new(10, gaps)
+        ViewRows::new(10, vec![FIRST_GAP, SECOND_GAP])
     }
 
     #[test]
@@ -94,12 +97,15 @@ mod tests {
         assert_eq!(with_gaps().view_row(diff_row), view_row);
     }
 
+    const FIRST_GAP: Gap = Gap { after: 2, rows: 2 };
+    const SECOND_GAP: Gap = Gap { after: 5, rows: 3 };
+
     #[yare::parameterized(
         a_row_before_any_gap = { 2, ViewRow::Diff(2) },
-        the_first_row_of_a_gap = { 3, ViewRow::Gap { after: 2 } },
-        the_last_row_of_a_gap = { 4, ViewRow::Gap { after: 2 } },
+        the_first_row_of_a_gap = { 3, ViewRow::Gap { gap: FIRST_GAP, row: 0 } },
+        the_last_row_of_a_gap = { 4, ViewRow::Gap { gap: FIRST_GAP, row: 1 } },
         the_row_after_a_gap = { 5, ViewRow::Diff(3) },
-        a_row_of_the_second_gap = { 10, ViewRow::Gap { after: 5 } },
+        a_row_of_the_second_gap = { 10, ViewRow::Gap { gap: SECOND_GAP, row: 2 } },
         the_last_row = { 14, ViewRow::Diff(9) },
     )]
     fn at(view_row: usize, shows: ViewRow) {

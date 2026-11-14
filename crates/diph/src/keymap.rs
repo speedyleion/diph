@@ -68,6 +68,9 @@ pub(crate) enum Action {
     StartCharacterSelection,
     StartLineSelection,
     CancelSelection,
+    /// Opens a comment box on the selection or the cursor's line.
+    Comment,
+    DiscardComment,
     Insert(InsertAt),
     OpenLine(OpenLineAt),
     NormalMode,
@@ -134,6 +137,7 @@ pub(crate) fn normal_keymap() -> Keymap<Action> {
         (vec![key(Key::V)], Action::StartCharacterSelection),
         (vec![shift(Key::V)], Action::StartLineSelection),
         (vec![key(Key::Escape)], Action::CancelSelection),
+        (vec![key(Key::C)], Action::Comment),
         (vec![key(Key::I)], Action::Insert(InsertAt::BeforeCursor)),
         (vec![key(Key::A)], Action::Insert(InsertAt::AfterCursor)),
         (vec![shift(Key::I)], Action::Insert(InsertAt::LineStart)),
@@ -157,6 +161,13 @@ pub(crate) fn insert_keymap() -> Keymap<Action> {
         (vec![key(Key::Backspace)], Action::Backspace),
         (vec![save_shortcut()], Action::Save),
     ])
+}
+
+pub(crate) fn comment_keymap() -> Keymap<Action> {
+    Keymap::new([(
+        vec![KeyboardShortcut::new(Modifiers::NONE, Key::Escape)],
+        Action::DiscardComment,
+    )])
 }
 
 /// Actions bound to sequences of key presses, which may span several frames.

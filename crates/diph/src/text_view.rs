@@ -11,20 +11,26 @@ use diph_core::{
 };
 use eframe::egui::{
     self, Align2, Color32, CursorIcon, FontId, Galley, Painter, Pos2, Rect, ScrollArea, Sense,
-    Stroke, TextFormat, TextStyle, UiBuilder, epaint::text::Glyph, pos2, text::LayoutJob, vec2,
+    Stroke, StrokeKind, TextFormat, TextStyle, UiBuilder, epaint::text::Glyph, pos2,
+    text::LayoutJob, vec2,
 };
 use itertools::{
     EitherOrBoth::{Both, Left, Right},
     Itertools as _,
 };
 
+use crate::comment::{CommentRange, Draft};
 use crate::cursor::Cursor;
 use crate::keymap::{
-    Action, InsertAt, Keymap, OpenLineAt, insert_keymap, normal_keymap, pressed_key,
+    Action, InsertAt, Keymap, OpenLineAt, comment_keymap, insert_keymap, normal_keymap, pressed_key,
 };
 use crate::palette::{CHANGED_MARK, ONE_SIDED_MARK, Palette};
 use crate::selection::{Selection, SelectionKind};
-use crate::view_rows::{ViewRow, ViewRows};
+use crate::view_rows::{Gap, ViewRow, ViewRows};
+
+/// Rows of an empty comment box: a row for its text, and half a row above
+/// and below it.
+const EMPTY_COMMENT_ROWS: usize = 2;
 
 /// Width of the cursor in insert mode, a bar before its column.
 const CURSOR_BAR_WIDTH: f32 = 2.0;
@@ -54,6 +60,8 @@ struct ColorsChunk {
 enum Mode {
     Normal,
     Insert,
+    /// Writing a comment.
+    Comment,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -84,12 +92,17 @@ pub struct TextView {
     /// The cursor in the buffer of `cursor_side`.
     cursor: Cursor,
     selection: Option<Selection>,
+    /// The comment being written in comment mode.
+    draft: Option<Draft>,
+    /// The gaps under comment boxes in the last frame.
+    gaps: Vec<Gap>,
     mode: Mode,
     /// Whether the last key pressed was bound to an action, so the text it
     /// typed is not inserted.
     key_handled: bool,
     normal_keys: Keymap<Action>,
     insert_keys: Keymap<Action>,
+    comment_keys: Keymap<Action>,
     /// Syntax colors of the left and right side, filled in from the top as
     /// the background highlighter delivers them.
     colors: [SideColors; 2],
@@ -121,6 +134,8 @@ impl TextView {
             cursor_side,
             cursor: Cursor::default(),
             selection: None,
+            draft: None,
+            gaps: Vec::new(),
             diff,
             current_change: None,
             scroll_to_top_row: None,
@@ -130,6 +145,7 @@ impl TextView {
             key_handled: false,
             normal_keys: normal_keymap(),
             insert_keys: insert_keymap(),
+            comment_keys: comment_keymap(),
             colors: Default::default(),
             colors_rx: None,
             highlight_runs: Default::default(),
@@ -180,9 +196,11 @@ impl TextView {
         self.rows_in_view = 0;
         self.mode = Mode::Normal;
         self.selection = None;
+        self.draft = None;
         self.key_handled = false;
         self.normal_keys.clear();
         self.insert_keys.clear();
+        self.comment_keys.clear();
         self.colors = Default::default();
         self.colors_received = [0; 2];
     }
@@ -232,8 +250,13 @@ impl TextView {
         self.rehighlight(1);
     }
 
-    pub(crate) fn is_insert_mode(&self) -> bool {
-        self.mode == Mode::Insert
+    /// What the status bar shows for the mode, if anything.
+    pub(crate) fn mode_label(&self) -> Option<&'static str> {
+        match self.mode {
+            Mode::Normal => None,
+            Mode::Insert => Some("-- INSERT --"),
+            Mode::Comment => Some("-- COMMENT --"),
+        }
     }
 
     pub(crate) fn process_input(&mut self, ui: &mut egui::Ui) -> Vec<ViewEvent> {
@@ -320,6 +343,7 @@ impl TextView {
             let keymap = match self.mode {
                 Mode::Normal => &mut self.normal_keys,
                 Mode::Insert => &mut self.insert_keys,
+                Mode::Comment => &mut self.comment_keys,
             };
             let pressed = keymap.press(key);
             self.key_handled = pressed.is_some();
@@ -396,6 +420,11 @@ impl TextView {
             Action::StartCharacterSelection => self.start_selection(SelectionKind::Character),
             Action::StartLineSelection => self.start_selection(SelectionKind::Line),
             Action::CancelSelection => self.selection = None,
+            Action::Comment => self.start_comment(),
+            Action::DiscardComment => {
+                self.draft = None;
+                self.mode = Mode::Normal;
+            }
             Action::Insert(at) => self.insert(at),
             Action::OpenLine(at) => self.open_line(at),
             Action::NormalMode => self.leave_insert(),
@@ -515,7 +544,7 @@ impl TextView {
 
     /// The rows the view shows.
     fn view_rows(&self) -> ViewRows {
-        ViewRows::new(self.diff.rows().len(), Vec::new())
+        ViewRows::new(self.diff.rows().len(), self.gaps.clone())
     }
 
     /// The row of the view that shows `line` of `side`.
@@ -533,6 +562,23 @@ impl TextView {
         if let Some((side, anchor)) = self.cursor_position() {
             self.selection = Some(Selection::new(kind, side, anchor));
         }
+    }
+
+    /// Opens a comment box on the selection, or on the cursor's line without
+    /// one, and switches to comment mode.
+    fn start_comment(&mut self) {
+        let Some((side, active)) = self.cursor_position() else {
+            return;
+        };
+        let selection = self.selection.take();
+        let selection = selection.unwrap_or(Selection::new(SelectionKind::Line, side, active));
+        let range = CommentRange {
+            side,
+            kind: selection.kind,
+            range: selection.range(active),
+        };
+        self.draft = Some(Draft { range });
+        self.mode = Mode::Comment;
     }
 
     /// Moves the cursor to the line of `side` across from it, keeping its
@@ -560,7 +606,11 @@ impl TextView {
         };
         move_it(&mut self.cursor, &self.diff.buffers()[side]);
         let line = self.cursor.position(&self.diff.buffers()[side]).line;
-        let row = self.view_row_of(side, line);
+        self.scroll_to_show(self.view_row_of(side, line));
+    }
+
+    /// Scrolls the least that brings row `row` of the view into view.
+    fn scroll_to_show(&mut self, row: usize) {
         let rows_in_view = self.rows_in_view.max(1);
         let top_row = self.scroll_to_top_row.unwrap_or(self.top_row);
         if row < top_row {
@@ -639,7 +689,6 @@ impl TextView {
     fn rows_ui(&mut self, ui: &mut egui::Ui) -> Range<f32> {
         let font = TextStyle::Monospace.resolve(ui.style());
         let char_width = ui.fonts_mut(|f| f.glyph_width(&font, '0'));
-        let rows = self.diff.rows();
         let line_count = self
             .diff
             .buffers()
@@ -660,6 +709,20 @@ impl TextView {
         };
 
         ui.spacing_mut().item_spacing.y = 0.0;
+        let draft_gap = self.draft.as_ref().map(|draft| Gap {
+            after: self
+                .diff
+                .row_of(draft.range.side, draft.range.range.end.line),
+            rows: EMPTY_COMMENT_ROWS,
+        });
+        let gaps: Vec<_> = draft_gap.into_iter().collect();
+        if gaps != self.gaps {
+            self.gaps = gaps;
+            // Keeps the comment box in view as it opens.
+            if let Some(gap) = draft_gap {
+                self.scroll_to_show(self.view_rows().view_row(gap.after) + gap.rows);
+            }
+        }
         let view_rows = self.view_rows();
         let mut area = ScrollArea::vertical().auto_shrink(false);
         if let Some(row) = self.scroll_to_top_row.take() {
@@ -671,7 +734,10 @@ impl TextView {
         }
         let cursor = self.cursor_position();
         let selection = self.selection;
+        let rows = self.diff.rows();
+        let draft = &self.draft;
         let output = area.show_rows(ui, layout.row_height, view_rows.len(), |ui, range| {
+            let first_in_view = range.start;
             // `last` paints every row, keeping the click if one was clicked.
             range
                 .filter_map(|view_row| match view_rows.at(view_row) {
@@ -683,8 +749,10 @@ impl TextView {
                         cursor,
                         selection,
                     ),
-                    ViewRow::Gap { .. } => {
-                        layout.paint_gap(ui);
+                    ViewRow::Gap { gap, row } => {
+                        let side = draft.as_ref()?.range.side;
+                        let paint_box = row == 0 || view_row == first_in_view;
+                        layout.paint_gap(ui, gap, row, side, paint_box);
                         None
                     }
                 })
@@ -920,9 +988,29 @@ impl RowLayout {
         clicked
     }
 
-    /// Takes up a row of a gap, leaving it blank.
-    fn paint_gap(&self, ui: &mut egui::Ui) {
-        ui.allocate_space(vec2(ui.available_width(), self.row_height));
+    /// Paints row `row` of `gap`, under a comment box on `side`, with filler
+    /// on the other side. When `paint_box`, also paints the box over the
+    /// whole gap.
+    fn paint_gap(&self, ui: &mut egui::Ui, gap: Gap, row: usize, side: usize, paint_box: bool) {
+        let size = vec2(ui.available_width(), self.row_height);
+        let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
+        let (left, right) = rect.split_left_right_at_x(rect.left() + self.half_width);
+        let (commented, other) = match side {
+            0 => (left, right),
+            _ => (right, left),
+        };
+        let divider = Stroke::new(1.0, self.palette.divider);
+        let painter = ui.painter();
+        painter.rect_filled(other, 0.0, self.palette.filler);
+        painter.vline(left.right(), rect.y_range(), divider);
+        if paint_box {
+            let top = rect.top() - row as f32 * self.row_height;
+            let bottom = top + gap.rows as f32 * self.row_height;
+            let x = commented.left() + self.gutter_width..=commented.right() - self.char_width;
+            let box_rect = Rect::from_x_y_ranges(x, top..=bottom);
+            let (fill, stroke) = (self.palette.filler, StrokeKind::Inside);
+            painter.rect(box_rect, 2.0, fill, divider, stroke);
+        }
     }
 
     /// Paints the cursor at `column` of a line in `half` whose `glyphs` are
@@ -1194,6 +1282,7 @@ fn column_at(glyphs: &[Glyph], x: f32) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::selection::SelectionRange;
     use eframe::egui::{Key, Modifiers, text::ByteIndex};
     use egui_kittest::{Harness, kittest::Queryable as _};
 
@@ -1617,14 +1706,15 @@ mod tests {
     }
 
     #[yare::parameterized(
-        after_i = { "i", true },
-        after_a = { "a", true },
-        not_after_escape = { "i Escape", false },
-        not_before_i = { "", false },
+        insert_after_i = { "i", Some("-- INSERT --") },
+        insert_after_a = { "a", Some("-- INSERT --") },
+        comment_after_c = { "c", Some("-- COMMENT --") },
+        none_after_escape = { "i Escape", None },
+        none_before_i = { "", None },
     )]
-    fn insert_mode_state_is_exposed_to_the_app(keys: &str, insert_mode: bool) {
+    fn mode_label_is_exposed_to_the_app(keys: &str, label: Option<&str>) {
         let harness = typed_in_unchanged_file(keys);
-        assert_eq!(harness.state().is_insert_mode(), insert_mode);
+        assert_eq!(harness.state().mode_label(), label);
     }
 
     #[yare::parameterized(
@@ -1946,7 +2036,7 @@ mod tests {
         let harness = typed_in_unchanged_file("v i");
 
         assert_eq!(harness.state().selection, None);
-        assert!(harness.state().is_insert_mode());
+        assert!(harness.state().mode == Mode::Insert);
     }
 
     fn row_layout() -> RowLayout {
@@ -2205,6 +2295,45 @@ mod tests {
         let (view, events) = harness.state();
         assert_eq!(events, &[ViewEvent::Yank("aé".to_owned())]);
         assert_eq!(view.selection, None);
-        assert!(!view.is_insert_mode());
+        assert!(view.mode == Mode::Normal);
+    }
+
+    #[yare::parameterized(
+        the_cursor_line_without_a_selection = {
+            "j c", SelectionKind::Line, Position { line: 1, column: 0 }, Position { line: 1, column: 0 }
+        },
+        the_lines_of_a_line_selection = {
+            "V j c", SelectionKind::Line, Position { line: 0, column: 0 }, Position { line: 1, column: 0 }
+        },
+        the_characters_of_a_character_selection = {
+            "l v l c", SelectionKind::Character, Position { line: 0, column: 1 }, Position { line: 0, column: 2 }
+        },
+    )]
+    fn c_comments_on(keys: &str, kind: SelectionKind, start: Position, end: Position) {
+        let harness = typed_in_unchanged_file(keys);
+
+        let range = harness.state().draft.as_ref().map(|draft| draft.range);
+        let expected = CommentRange {
+            side: 1,
+            kind,
+            range: SelectionRange { start, end },
+        };
+        assert_eq!(range, Some(expected));
+    }
+
+    #[test]
+    fn escape_discards_the_comment_and_returns_to_normal_mode() {
+        let harness = typed_in_unchanged_file("c x Escape j");
+
+        let view = harness.state();
+        let line = view.cursor_position().map(|(_, position)| position.line);
+        assert_eq!((view.draft.is_none(), line), (true, Some(1)));
+    }
+
+    #[test]
+    fn an_empty_comment_box_takes_two_rows_under_the_last_line() {
+        let harness = typed_in_unchanged_file("V j c");
+
+        assert_eq!(harness.state().gaps, vec![Gap { after: 1, rows: 2 }]);
     }
 }
