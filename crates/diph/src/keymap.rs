@@ -9,7 +9,7 @@ mod platform;
 #[path = "keymap/other.rs"]
 mod platform;
 
-pub(crate) use platform::{reload_shortcut, save_shortcut};
+pub(crate) use platform::{reload_shortcut, save_comment_shortcut, save_shortcut};
 
 /// The digit keys, in order from 0.
 const DIGITS: [Key; 10] = [
@@ -70,6 +70,7 @@ pub(crate) enum Action {
     CancelSelection,
     /// Opens a comment box on the selection or the cursor's line.
     Comment,
+    SaveComment,
     DiscardComment,
     Insert(InsertAt),
     OpenLine(OpenLineAt),
@@ -164,10 +165,13 @@ pub(crate) fn insert_keymap() -> Keymap<Action> {
 }
 
 pub(crate) fn comment_keymap() -> Keymap<Action> {
-    Keymap::new([(
-        vec![KeyboardShortcut::new(Modifiers::NONE, Key::Escape)],
-        Action::DiscardComment,
-    )])
+    Keymap::new([
+        (vec![save_comment_shortcut()], Action::SaveComment),
+        (
+            vec![KeyboardShortcut::new(Modifiers::NONE, Key::Escape)],
+            Action::DiscardComment,
+        ),
+    ])
 }
 
 /// Actions bound to sequences of key presses, which may span several frames.
