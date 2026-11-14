@@ -54,14 +54,18 @@ enum Mode {
     Insert,
 }
 
-pub(crate) struct SaveRequest {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ViewEvent {
+    Save,
+}
+
+pub(crate) struct SaveTarget {
     pub(crate) side: usize,
     pub(crate) text: String,
 }
 
 pub struct TextView {
     diff: SideBySide,
-    pending_save: Option<SaveRequest>,
     /// Index into `diff.changes()` of the change last jumped to.
     current_change: Option<usize>,
     /// Row to scroll to the top of the view on the next frame.
@@ -112,7 +116,6 @@ impl TextView {
             cursor_side,
             cursor: Cursor::default(),
             diff,
-            pending_save: None,
             current_change: None,
             scroll_to_top_row: None,
             top_row: 0,
@@ -182,11 +185,15 @@ impl TextView {
         self.mode == Mode::Insert
     }
 
-    pub(crate) fn process_input(&mut self, ui: &mut egui::Ui) {
+    pub(crate) fn process_input(&mut self, ui: &mut egui::Ui) -> Vec<ViewEvent> {
         let events = ui.input(|i| i.events.clone());
+        let mut view_events = Vec::new();
         for event in &events {
-            self.handle(ui.ctx(), event);
+            if let Some(event) = self.handle(ui.ctx(), event) {
+                view_events.push(event);
+            }
         }
+        view_events
     }
 
     pub(crate) fn show_header(&mut self, ui: &mut egui::Ui, labels: [&Path; 2]) {
@@ -259,7 +266,7 @@ impl TextView {
 
     /// Performs the action of a pressed key, or in insert mode inserts typed
     /// text that a bound key did not type.
-    fn handle(&mut self, ctx: &egui::Context, event: &egui::Event) {
+    fn handle(&mut self, ctx: &egui::Context, event: &egui::Event) -> Option<ViewEvent> {
         if let Some(key) = pressed_key(event) {
             let keymap = match self.mode {
                 Mode::Normal => &mut self.normal_keys,
@@ -268,7 +275,7 @@ impl TextView {
             let pressed = keymap.press(key);
             self.key_handled = pressed.is_some();
             if let Some((action, count)) = pressed {
-                self.perform(ctx, action, count);
+                return self.perform(ctx, action, count);
             }
         } else if let egui::Event::Text(text) = event
             && self.mode == Mode::Insert
@@ -276,10 +283,16 @@ impl TextView {
         {
             self.type_text(text);
         }
+        None
     }
 
     /// Performs `action`, with the count typed before its keys.
-    fn perform(&mut self, ctx: &egui::Context, action: Action, count: Option<usize>) {
+    fn perform(
+        &mut self,
+        ctx: &egui::Context,
+        action: Action,
+        count: Option<usize>,
+    ) -> Option<ViewEvent> {
         // The index of the line a count numbers from 1.
         let counted_line = count.map(|line| line - 1);
         let count = count.unwrap_or(1).try_into().unwrap_or(isize::MAX);
@@ -320,7 +333,7 @@ impl TextView {
             Action::LeftSide => self.switch_side(0),
             Action::RightSide => self.switch_side(1),
             Action::Close => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
-            Action::Save => self.request_save(),
+            Action::Save => return Some(ViewEvent::Save),
             Action::Insert(at) => self.insert(at),
             Action::OpenLine(at) => self.open_line(at),
             Action::NormalMode => self.leave_insert(),
@@ -328,6 +341,7 @@ impl TextView {
             Action::Tab => self.type_text("\t"),
             Action::Backspace => self.backspace(),
         }
+        None
     }
 
     /// Edits the buffer of `side` with `edit` and starts highlighting the
@@ -340,20 +354,12 @@ impl TextView {
         edit
     }
 
-    pub(crate) fn save_request(&self) -> Option<SaveRequest> {
+    pub(crate) fn save_target(&self) -> Option<SaveTarget> {
         let side = self.cursor_side?;
-        Some(SaveRequest {
+        Some(SaveTarget {
             side,
             text: self.diff.buffers()[side].text(),
         })
-    }
-
-    fn request_save(&mut self) {
-        self.pending_save = self.save_request();
-    }
-
-    pub(crate) fn take_save_request(&mut self) -> Option<SaveRequest> {
-        self.pending_save.take()
     }
 
     /// Inserts `text` at the cursor and moves the cursor past it.
@@ -987,7 +993,7 @@ mod tests {
     /// Presses `keys`, in [`typed_in_unchanged_file`]'s notation, one per
     /// frame. A key with Shift or Ctrl comes after a press of that modifier
     /// key, as a keyboard sends it.
-    fn press(harness: &mut Harness<'static, TextView>, keys: &str) {
+    fn press<State>(harness: &mut Harness<'_, State>, keys: &str) {
         for key in keys.split_whitespace() {
             let (modifiers, pressed) = key_press(key);
             if modifiers.shift {
@@ -1463,47 +1469,27 @@ mod tests {
         assert!(harness.state().colors[1].lines.is_empty());
     }
 
-    fn saving_view(files: [crate::app::SideFile; 2]) -> Harness<'static, TextView> {
-        let mut save_message = None;
-        Harness::new_ui_state(
-            move |ui, view| {
-                view.process_input(ui);
-                view.show_header(ui, [&files[0].label, &files[1].label]);
-                crate::app::handle_save_request(
-                    &files,
-                    &mut save_message,
-                    view.take_save_request(),
-                );
-                view.show_diff(ui);
-            },
-            unchanged_file(),
-        )
-    }
-
-    fn side_files(right_save_path: Option<PathBuf>) -> [crate::app::SideFile; 2] {
-        [
-            crate::app::SideFile {
-                label: "left".into(),
-                save_path: None,
-            },
-            crate::app::SideFile {
-                label: "right".into(),
-                save_path: right_save_path,
-            },
-        ]
-    }
-
     #[yare::parameterized(
         in_normal_mode = { "i x Escape C-s" },
         in_insert_mode = { "i x C-s" },
     )]
-    fn ctrl_s_saves_the_side_with_the_cursor(keys: &str) {
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("right.txt");
-        let mut harness = saving_view(side_files(Some(file.clone())));
+    fn ctrl_s_emits_a_save_event_for_the_side_with_the_cursor(keys: &str) {
+        let mut harness = Harness::new_ui_state(
+            |ui, (view, events)| {
+                events.extend(view.process_input(ui));
+                view.show_header(ui, [Path::new("left"), Path::new("right")]);
+                view.show_diff(ui);
+            },
+            (unchanged_file(), Vec::new()),
+        );
         harness.run();
         press(&mut harness, keys);
+
+        let (view, events) = harness.state();
+        assert_eq!(events, &[ViewEvent::Save]);
+        let target = view.save_target().unwrap();
+        assert_eq!(target.side, 1);
         let lines: String = (0..200).map(|i| format!("line {i}\n")).collect();
-        assert_eq!(std::fs::read_to_string(&file).unwrap(), format!("x{lines}"));
+        assert_eq!(target.text, format!("x{lines}"));
     }
 }

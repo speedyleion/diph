@@ -6,7 +6,7 @@ use eframe::egui;
 
 use crate::menu::{MenuAction, MenuBar};
 use crate::palette::Palette;
-use crate::text_view::{SaveRequest, TextView};
+use crate::text_view::{SaveTarget, TextView, ViewEvent};
 
 pub(crate) struct SideFile {
     /// The name shown above the side.
@@ -72,9 +72,16 @@ impl eframe::App for App {
                 &mut self.theme,
             );
         }
-        self.view.process_input(ui);
-        if let Some(request) = self.view.take_save_request() {
-            handle_save_request(&self.files, &mut self.save_message, Some(request));
+        for event in self.view.process_input(ui) {
+            match event {
+                ViewEvent::Save => {
+                    handle_save_target(
+                        &self.files,
+                        &mut self.save_message,
+                        self.view.save_target(),
+                    );
+                }
+            }
         }
         let started = self.started;
         let startup_time = *self.startup_time.get_or_insert_with(|| started.elapsed());
@@ -111,7 +118,7 @@ fn handle_menu_action(
     selected_theme: &mut &'static str,
 ) {
     match action {
-        MenuAction::Save => handle_save_request(files, save_message, view.save_request()),
+        MenuAction::Save => handle_save_target(files, save_message, view.save_target()),
         MenuAction::Theme(name) => {
             if let Some(theme) = Theme::named(&name) {
                 *selected_theme = theme.name();
@@ -122,18 +129,18 @@ fn handle_menu_action(
     }
 }
 
-pub(crate) fn handle_save_request(
+fn handle_save_target(
     files: &[SideFile; 2],
     save_message: &mut Option<String>,
-    request: Option<SaveRequest>,
+    target: Option<SaveTarget>,
 ) {
-    let Some(request) = request else {
+    let Some(target) = target else {
         return;
     };
-    let file = &files[request.side];
+    let file = &files[target.side];
     *save_message = Some(match &file.save_path {
         None => format!("{} can't be saved", file.label.display()),
-        Some(path) => match std::fs::write(path, request.text) {
+        Some(path) => match std::fs::write(path, target.text) {
             Ok(()) => format!("saved {}", path.display()),
             Err(error) => format!("couldn't save {}: {error}", path.display()),
         },
@@ -174,9 +181,9 @@ mod tests {
 
     use crate::menu::MenuAction;
     use crate::palette::Palette;
-    use crate::text_view::{SaveRequest, TextView};
+    use crate::text_view::{SaveTarget, TextView};
 
-    use super::{SideFile, handle_menu_action, handle_save_request, show_status};
+    use super::{SideFile, handle_menu_action, handle_save_target, show_status};
 
     fn test_view() -> TextView {
         TextView::new(SideBySide::new([
@@ -246,16 +253,16 @@ mod tests {
     }
 
     #[test]
-    fn save_request_writes_the_requested_side() {
+    fn save_target_writes_the_requested_side() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("right.rs");
         let files = test_files(Some(file.clone()));
         let mut save_message = None;
 
-        handle_save_request(
+        handle_save_target(
             &files,
             &mut save_message,
-            Some(SaveRequest {
+            Some(SaveTarget {
                 side: 1,
                 text: "edited right\n".to_owned(),
             }),
@@ -266,14 +273,14 @@ mod tests {
     }
 
     #[test]
-    fn save_request_reports_an_unsavable_side() {
+    fn save_target_reports_an_unsavable_side() {
         let files = test_files(None);
         let mut save_message = None;
 
-        handle_save_request(
+        handle_save_target(
             &files,
             &mut save_message,
-            Some(SaveRequest {
+            Some(SaveTarget {
                 side: 1,
                 text: "edited right\n".to_owned(),
             }),
@@ -283,16 +290,16 @@ mod tests {
     }
 
     #[test]
-    fn save_request_reports_a_write_failure() {
+    fn save_target_reports_a_write_failure() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("missing/right.rs");
         let files = test_files(Some(file.clone()));
         let mut save_message = None;
 
-        handle_save_request(
+        handle_save_target(
             &files,
             &mut save_message,
-            Some(SaveRequest {
+            Some(SaveTarget {
                 side: 1,
                 text: "edited right\n".to_owned(),
             }),
