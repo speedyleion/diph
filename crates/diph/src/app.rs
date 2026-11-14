@@ -164,12 +164,12 @@ fn save_theme(storage: &mut dyn eframe::Storage, theme: &str) {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+
     use std::path::PathBuf;
     use std::time::Duration;
 
     use diph_core::{Buffer, SideBySide, Theme};
-    use eframe::Storage as _;
+
     use eframe::egui;
     use egui_kittest::{Harness, kittest::Queryable as _};
 
@@ -177,7 +177,7 @@ mod tests {
     use crate::palette::Palette;
     use crate::text_view::{SaveRequest, TextView};
 
-    use super::{SideFile, handle_menu_action, handle_save_request, save_theme, show_status};
+    use super::{SideFile, handle_menu_action, handle_save_request, show_status};
 
     fn test_view() -> TextView {
         TextView::new(
