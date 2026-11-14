@@ -9,13 +9,11 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use anyhow::Context as _;
 use clap::{CommandFactory as _, Parser, error::ErrorKind};
-use diph_core::{Buffer, SideBySide};
 use eframe::egui;
 use winit::event_loop::{EventLoop, EventLoopProxy};
 
-use app::{App, SideFile};
+use app::{App, FileLoadError, SideFile};
 use text_view::TextView;
 
 /// A side-by-side diff tool.
@@ -76,24 +74,11 @@ impl Args {
     }
 }
 
-/// Git passes `/dev/null` for the missing side of an added or deleted
-/// file, even on Windows where no such file exists.
-fn is_null(path: &Path) -> bool {
-    path == Path::new("/dev/null")
-}
-
-fn read(path: &Path) -> anyhow::Result<Vec<u8>> {
-    if is_null(path) {
-        return Ok(Vec::new());
-    }
-    std::fs::read(path).with_context(|| format!("reading {}", path.display()))
-}
-
 /// The name to show for a side: "(none)" for `/dev/null`, else the label if
 /// given, else the path.
 fn shown(path: &Path, label: Option<&Path>) -> PathBuf {
     match label {
-        _ if is_null(path) => PathBuf::from("(none)"),
+        _ if app::is_null(path) => PathBuf::from("(none)"),
         Some(label) => label.to_path_buf(),
         None => path.to_path_buf(),
     }
@@ -101,7 +86,7 @@ fn shown(path: &Path, label: Option<&Path>) -> PathBuf {
 
 /// The label if given, else `path`, or `other` when `path` is `/dev/null`.
 fn side_path(path: &Path, label: Option<&Path>, other: &Path) -> PathBuf {
-    let path = if is_null(path) { other } else { path };
+    let path = if app::is_null(path) { other } else { path };
     label.unwrap_or(path).to_path_buf()
 }
 
@@ -119,46 +104,31 @@ fn diff_name([left, right]: &[PathBuf; 2]) -> String {
     }
 }
 
-/// Whether text read from `path` as `bytes` can be saved without replacing
-/// undecodable bytes.
-fn can_save(path: &Path, bytes: &[u8]) -> bool {
-    !is_null(path) && std::str::from_utf8(bytes).is_ok()
-}
-
-/// Git's test: a NUL byte in the first 8000 bytes means binary.
-fn is_binary(bytes: &[u8]) -> bool {
-    bytes.iter().take(8000).any(|&b| b == 0)
-}
-
-fn text_diff([left, right]: [&[u8]; 2]) -> SideBySide {
-    let buffer = |bytes| Buffer::new(&String::from_utf8_lossy(bytes));
-    SideBySide::new([buffer(left), buffer(right)])
-}
-
 fn main() -> anyhow::Result<()> {
     let started = Instant::now();
     let args = Args::try_parse_args(std::env::args_os()).unwrap_or_else(|e| e.exit());
     let paths = args.side_paths();
     let name = diff_name(&paths);
-    let (left, right) = (read(&args.left)?, read(&args.right)?);
-    if is_binary(&left) || is_binary(&right) {
-        eprintln!("diph: {name}: binary files differ");
-        return Ok(());
-    }
-
-    let diff = text_diff([left.as_slice(), right.as_slice()]);
-    let files = [
+    let mut files = [
         SideFile {
             label: shown(&args.left, args.label(0)),
             path: args.left.clone(),
-            saveable: can_save(&args.left, &left),
+            saveable: false,
         },
         SideFile {
             label: shown(&args.right, args.label(1)),
             path: args.right.clone(),
-            saveable: can_save(&args.right, &right),
+            saveable: false,
         },
     ];
+    let diff = match app::load_files(&mut files) {
+        Ok(diff) => diff,
+        Err(FileLoadError::Binary) => {
+            eprintln!("diph: {name}: binary files differ");
+            return Ok(());
+        }
+        Err(FileLoadError::Read(error)) => return Err(error),
+    };
     let view = TextView::new(diff);
 
     let options = eframe::NativeOptions {
@@ -235,28 +205,5 @@ mod tests {
     )]
     fn diff_name(paths: [&str; 2], expected: &str) {
         assert_eq!(super::diff_name(&paths.map(PathBuf::from)), expected);
-    }
-
-    #[test]
-    fn dev_null_reads_as_empty_even_where_it_does_not_exist() {
-        assert_eq!(read(Path::new("/dev/null")).unwrap(), b"");
-    }
-
-    #[yare::parameterized(
-        nul_byte_within_the_first_8000_bytes = { b"text\0more".to_vec(), true },
-        text_without_a_nul_byte = { "café\r\n".as_bytes().to_vec(), false },
-        nul_byte_after_the_first_8000_bytes = { [vec![b'a'; 8000], vec![0]].concat(), false },
-    )]
-    fn is_binary(bytes: Vec<u8>, binary: bool) {
-        assert_eq!(super::is_binary(&bytes), binary);
-    }
-
-    #[yare::parameterized(
-        a_file = { "a.txt", b"text\n", true },
-        dev_null = { "/dev/null", b"", false },
-        a_file_that_is_not_utf_8 = { "a.txt", b"caf\xe9\n", false },
-    )]
-    fn can_save(path: &str, bytes: &[u8], saveable: bool) {
-        assert_eq!(super::can_save(Path::new(path), bytes), saveable);
     }
 }
