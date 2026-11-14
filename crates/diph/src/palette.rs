@@ -19,6 +19,8 @@ pub struct Palette {
     pub cursor: Color32,
     /// Color of the character under the cursor.
     pub cursor_text: Color32,
+    /// Tint of the active visual selection.
+    pub selection: Color32,
     /// Background opposite a one-sided line.
     pub filler: Color32,
     /// Background of a line with nothing opposite it.
@@ -48,6 +50,7 @@ impl Palette {
             divider: background.lerp_to_gamma(text, 0.2),
             cursor: theme.caret().map_or(text, rgb),
             cursor_text: background,
+            selection: background.lerp_to_gamma(theme.caret().map_or(text, rgb), 0.35),
             filler: background.lerp_to_gamma(text, 0.06),
             one_sided: background.lerp_to_gamma(ONE_SIDED_MARK, 0.3),
             changed: background.lerp_to_gamma(CHANGED_MARK, 0.3),
