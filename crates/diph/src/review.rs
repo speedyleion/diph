@@ -7,7 +7,7 @@ use diph_core::Position;
 use serde::{Deserialize, Serialize};
 
 use crate::comment::{Comment, CommentRange};
-use crate::selection::SelectionKind;
+use crate::selection::{SelectionKind, SelectionRange};
 
 #[derive(Serialize, Deserialize)]
 struct ReviewFile {
@@ -36,7 +36,7 @@ enum Side {
 }
 
 /// A place in a side's text, counting lines and columns from 1.
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Copy, Serialize, Deserialize)]
 struct Place {
     line: usize,
     /// Left out for a comment on whole lines.
@@ -65,6 +65,43 @@ impl ReviewComment {
             body: comment.text.clone(),
         }
     }
+
+    /// The comment this stores, if its side is shown as its path.
+    fn comment(self, paths: [&Path; 2]) -> Option<Comment> {
+        let side = match self.side {
+            Side::Left => 0,
+            Side::Right => 1,
+        };
+        if paths[side] != self.path {
+            return None;
+        }
+        let kind = match self.start.column {
+            Some(_) => SelectionKind::Character,
+            None => SelectionKind::Line,
+        };
+        let position = |place: Place| Position {
+            line: place.line.saturating_sub(1),
+            column: place.column.unwrap_or(1).saturating_sub(1),
+        };
+        let range = SelectionRange {
+            start: position(self.start),
+            end: position(self.end),
+        };
+        let range = CommentRange { side, kind, range };
+        Some(Comment {
+            range,
+            text: self.body,
+        })
+    }
+}
+
+/// The comments in the review file `file` on the left and right side shown
+/// as `paths`. None when the file does not exist.
+pub(crate) fn load(file: &Path, paths: [&Path; 2]) -> anyhow::Result<Vec<Comment>> {
+    let comments = read(file)?.comments.into_iter();
+    Ok(comments
+        .filter_map(|comment| comment.comment(paths))
+        .collect())
 }
 
 /// Writes `comments` to the review `file`
@@ -105,7 +142,7 @@ mod tests {
     use diph_core::Position;
     use serde_json::json;
 
-    use super::{ReviewComment, save};
+    use super::{ReviewComment, load, save};
     use crate::comment::{Comment, CommentRange};
     use crate::selection::{SelectionKind, SelectionRange};
 
@@ -185,5 +222,47 @@ mod tests {
             .collect();
         assert_eq!(saved["version"].as_u64(), Some(1));
         assert_eq!(bodies, vec!["kept", "new"]);
+    }
+
+    #[yare::parameterized(
+        a_line_comment_from_its_lines_first_column = { SelectionKind::Line, 0 },
+        a_character_comment = { SelectionKind::Character, 4 },
+    )]
+    fn loading_reads_back_saved_comments(kind: SelectionKind, start_column: usize) {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("review.json");
+        let mut comment = comment(kind, "body");
+        comment.range.range.start.column = start_column;
+        let review_comment = ReviewComment::new(&comment, Path::new("a.rs"), "text".to_owned());
+        save(&file, [Path::new("a.rs"); 2], vec![review_comment]).unwrap();
+
+        let loaded = load(&file, [Path::new("a.rs"); 2]).unwrap();
+
+        assert_eq!(loaded, vec![comment]);
+    }
+
+    #[yare::parameterized(
+        on_the_same_path = { ["old.rs", "new.rs"], 1 },
+        on_the_path_of_the_other_side = { ["new.rs", "old.rs"], 0 },
+        on_another_path = { ["old.rs", "other.rs"], 0 },
+    )]
+    fn loading_keeps_comments_on_their_sides_path(paths: [&str; 2], loaded: usize) {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("review.json");
+        let comments = vec![review_comment("new.rs", "body")];
+        save(&file, [Path::new("new.rs"); 2], comments).unwrap();
+
+        let comments = load(&file, paths.map(Path::new)).unwrap();
+
+        assert_eq!(comments.len(), loaded);
+    }
+
+    #[test]
+    fn loading_a_missing_file_reads_no_comments() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let comments = load(&dir.path().join("review.json"), [Path::new("a.rs"); 2]).unwrap();
+
+        assert_eq!(comments, vec![]);
     }
 }
