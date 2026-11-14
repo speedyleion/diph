@@ -119,17 +119,20 @@ fn diff_name([left, right]: &[PathBuf; 2]) -> String {
     }
 }
 
-/// The file a side read from `path` as `bytes` saves to: none for
-/// `/dev/null`, or for text that isn't UTF-8, whose undecodable bytes saving
-/// would replace.
-fn save_file(path: &Path, bytes: &[u8]) -> Option<PathBuf> {
-    let saveable = !is_null(path) && std::str::from_utf8(bytes).is_ok();
-    saveable.then(|| path.to_path_buf())
+/// Whether text read from `path` as `bytes` can be saved without replacing
+/// undecodable bytes.
+fn can_save(path: &Path, bytes: &[u8]) -> bool {
+    !is_null(path) && std::str::from_utf8(bytes).is_ok()
 }
 
 /// Git's test: a NUL byte in the first 8000 bytes means binary.
 fn is_binary(bytes: &[u8]) -> bool {
     bytes.iter().take(8000).any(|&b| b == 0)
+}
+
+fn text_diff([left, right]: [&[u8]; 2]) -> SideBySide {
+    let buffer = |bytes| Buffer::new(&String::from_utf8_lossy(bytes));
+    SideBySide::new([buffer(left), buffer(right)])
 }
 
 fn main() -> anyhow::Result<()> {
@@ -143,17 +146,17 @@ fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    // Non-UTF-8 text shows U+FFFD in place of the bytes it can't decode.
-    let buffer = |bytes| Buffer::new(&String::from_utf8_lossy(bytes));
-    let diff = SideBySide::new([buffer(&left), buffer(&right)]);
+    let diff = text_diff([left.as_slice(), right.as_slice()]);
     let files = [
         SideFile {
             label: shown(&args.left, args.label(0)),
-            save_path: save_file(&args.left, &left),
+            path: args.left.clone(),
+            saveable: can_save(&args.left, &left),
         },
         SideFile {
             label: shown(&args.right, args.label(1)),
-            save_path: save_file(&args.right, &right),
+            path: args.right.clone(),
+            saveable: can_save(&args.right, &right),
         },
     ];
     let view = TextView::new(diff);
@@ -253,8 +256,7 @@ mod tests {
         dev_null = { "/dev/null", b"", false },
         a_file_that_is_not_utf_8 = { "a.txt", b"caf\xe9\n", false },
     )]
-    fn save_file(path: &str, bytes: &[u8], saveable: bool) {
-        let file = super::save_file(Path::new(path), bytes);
-        assert_eq!(file.is_some(), saveable);
+    fn can_save(path: &str, bytes: &[u8], saveable: bool) {
+        assert_eq!(super::can_save(Path::new(path), bytes), saveable);
     }
 }

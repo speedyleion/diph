@@ -11,8 +11,10 @@ use crate::text_view::{SaveTarget, TextView, ViewEvent};
 pub(crate) struct SideFile {
     /// The name shown above the side.
     pub(crate) label: PathBuf,
-    /// Where the side saves to; none when it can't be saved.
-    pub(crate) save_path: Option<PathBuf>,
+    /// Where the side is read from and saved to.
+    pub(crate) path: PathBuf,
+    /// Whether the source text can be saved without replacing invalid bytes.
+    pub(crate) saveable: bool,
 }
 
 /// The key the name of the picked theme is saved under between runs.
@@ -67,7 +69,7 @@ impl eframe::App for App {
                 action,
                 &ctx,
                 &mut self.view,
-                &self.files,
+                &mut self.files,
                 &mut self.save_message,
                 &mut self.theme,
             );
@@ -80,6 +82,9 @@ impl eframe::App for App {
                         &mut self.save_message,
                         self.view.save_target(),
                     );
+                }
+                ViewEvent::Reload => {
+                    handle_reload(&mut self.files, &mut self.view, &mut self.save_message);
                 }
             }
         }
@@ -113,12 +118,13 @@ fn handle_menu_action(
     action: MenuAction,
     ctx: &egui::Context,
     view: &mut TextView,
-    files: &[SideFile; 2],
+    files: &mut [SideFile; 2],
     save_message: &mut Option<String>,
     selected_theme: &mut &'static str,
 ) {
     match action {
         MenuAction::Save => handle_save_target(files, save_message, view.save_target()),
+        MenuAction::Reload => handle_reload(files, view, save_message),
         MenuAction::Theme(name) => {
             if let Some(theme) = Theme::named(&name) {
                 *selected_theme = theme.name();
@@ -127,6 +133,32 @@ fn handle_menu_action(
             }
         }
     }
+}
+
+fn handle_reload(
+    files: &mut [SideFile; 2],
+    view: &mut TextView,
+    save_message: &mut Option<String>,
+) {
+    let [left, right] = [crate::read(&files[0].path), crate::read(&files[1].path)];
+    let bytes = match (left, right) {
+        (Ok(left), Ok(right)) => [left, right],
+        (Err(error), _) | (_, Err(error)) => {
+            *save_message = Some(format!("couldn't reload: {error}"));
+            return;
+        }
+    };
+    if bytes.iter().any(|bytes| crate::is_binary(bytes)) {
+        *save_message = Some("couldn't reload: binary files differ".to_owned());
+        return;
+    }
+
+    let diff = crate::text_diff(bytes.each_ref().map(Vec::as_slice));
+    for (file, bytes) in files.iter_mut().zip(bytes) {
+        file.saveable = crate::can_save(&file.path, &bytes);
+    }
+    view.reload(diff);
+    *save_message = Some("reloaded".to_owned());
 }
 
 fn handle_save_target(
@@ -138,11 +170,11 @@ fn handle_save_target(
         return;
     };
     let file = &files[target.side];
-    *save_message = Some(match &file.save_path {
-        None => format!("{} can't be saved", file.label.display()),
-        Some(path) => match std::fs::write(path, target.text) {
-            Ok(()) => format!("saved {}", path.display()),
-            Err(error) => format!("couldn't save {}: {error}", path.display()),
+    *save_message = Some(match file.saveable {
+        false => format!("{} can't be saved", file.label.display()),
+        true => match std::fs::write(&file.path, target.text) {
+            Ok(()) => format!("saved {}", file.path.display()),
+            Err(error) => format!("couldn't save {}: {error}", file.path.display()),
         },
     });
 }
@@ -183,7 +215,7 @@ mod tests {
     use crate::palette::Palette;
     use crate::text_view::{SaveTarget, TextView};
 
-    use super::{SideFile, handle_menu_action, handle_save_target, show_status};
+    use super::{SideFile, handle_menu_action, handle_reload, handle_save_target, show_status};
 
     fn test_view() -> TextView {
         TextView::new(SideBySide::new([
@@ -192,15 +224,18 @@ mod tests {
         ]))
     }
 
-    fn test_files(right_save_path: Option<PathBuf>) -> [SideFile; 2] {
+    fn test_files(right_path: Option<PathBuf>) -> [SideFile; 2] {
+        let right_saveable = right_path.is_some();
         [
             SideFile {
                 label: "left.rs".into(),
-                save_path: None,
+                path: "left.rs".into(),
+                saveable: false,
             },
             SideFile {
                 label: "right.rs".into(),
-                save_path: right_save_path,
+                path: right_path.unwrap_or_else(|| "right.rs".into()),
+                saveable: right_saveable,
             },
         ]
     }
@@ -215,13 +250,13 @@ mod tests {
         let ctx = egui::Context::default();
         let mut selected_theme = Theme::default().name();
 
-        let files = test_files(None);
+        let mut files = test_files(None);
         let mut save_message = None;
         handle_menu_action(
             MenuAction::Theme(name.to_owned()),
             &ctx,
             &mut view,
-            &files,
+            &mut files,
             &mut save_message,
             &mut selected_theme,
         );
@@ -314,7 +349,7 @@ mod tests {
     fn menu_save_uses_the_app_save_handler() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("right.rs");
-        let files = test_files(Some(file.clone()));
+        let mut files = test_files(Some(file.clone()));
         let mut view = test_view();
         let mut save_message = None;
         let mut selected_theme = Theme::default().name();
@@ -323,12 +358,132 @@ mod tests {
             MenuAction::Save,
             &egui::Context::default(),
             &mut view,
-            &files,
+            &mut files,
             &mut save_message,
             &mut selected_theme,
         );
 
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "right\n");
         assert_eq!(save_message, Some(format!("saved {}", file.display())));
+    }
+
+    #[test]
+    fn menu_reload_reads_the_source_files_into_the_view() {
+        let dir = tempfile::tempdir().unwrap();
+        let left = dir.path().join("left.rs");
+        let right = dir.path().join("right.rs");
+        std::fs::write(&left, "original left\n").unwrap();
+        std::fs::write(&right, "original right\n").unwrap();
+        let mut files = [
+            SideFile {
+                label: "left.rs".into(),
+                path: left,
+                saveable: false,
+            },
+            SideFile {
+                label: "right.rs".into(),
+                path: right.clone(),
+                saveable: true,
+            },
+        ];
+        let mut view = TextView::new(SideBySide::new([
+            Buffer::new("original left\n"),
+            Buffer::new("original right\n"),
+        ]));
+        std::fs::write(&files[0].path, "reloaded left\n").unwrap();
+        std::fs::write(&files[1].path, "reloaded right\n").unwrap();
+        let mut save_message = None;
+        let mut selected_theme = Theme::default().name();
+
+        handle_menu_action(
+            MenuAction::Reload,
+            &egui::Context::default(),
+            &mut view,
+            &mut files,
+            &mut save_message,
+            &mut selected_theme,
+        );
+
+        assert_eq!(view.save_target().unwrap().text, "reloaded right\n");
+        assert_eq!(save_message.as_deref(), Some("reloaded"));
+        assert!(files[0].saveable);
+    }
+
+    #[yare::parameterized(
+        missing_source = { None, "couldn't reload:" },
+        binary_source = { Some(b"binary\0data"), "couldn't reload: binary files differ" },
+    )]
+    fn menu_reload_errors_leave_the_open_diff_unchanged(
+        right_contents: Option<&[u8]>,
+        expected_message: &str,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let left = dir.path().join("left.rs");
+        let right = dir.path().join("right.rs");
+        std::fs::write(&left, "original left\n").unwrap();
+        std::fs::write(&right, "original right\n").unwrap();
+        let mut files = [
+            SideFile {
+                label: "left.rs".into(),
+                path: left.clone(),
+                saveable: true,
+            },
+            SideFile {
+                label: "right.rs".into(),
+                path: right.clone(),
+                saveable: true,
+            },
+        ];
+        let mut view = TextView::new(SideBySide::new([
+            Buffer::new("original left\n"),
+            Buffer::new("original right\n"),
+        ]));
+        std::fs::write(&files[0].path, "changed left\n").unwrap();
+        match right_contents {
+            Some(contents) => std::fs::write(&right, contents).unwrap(),
+            None => std::fs::remove_file(&right).unwrap(),
+        }
+        let mut save_message = None;
+
+        handle_reload(&mut files, &mut view, &mut save_message);
+
+        assert_eq!(view.save_target().unwrap().text, "original right\n");
+        assert!(
+            save_message
+                .as_deref()
+                .is_some_and(|message| message.starts_with(expected_message))
+        );
+    }
+
+    #[test]
+    fn menu_reload_disables_saving_for_non_utf8_sources() {
+        let dir = tempfile::tempdir().unwrap();
+        let left = dir.path().join("left.rs");
+        let right = dir.path().join("right.rs");
+        std::fs::write(&left, "original left\n").unwrap();
+        std::fs::write(&right, "original right\n").unwrap();
+        let mut files = [
+            SideFile {
+                label: "left.rs".into(),
+                path: left.clone(),
+                saveable: true,
+            },
+            SideFile {
+                label: "right.rs".into(),
+                path: right.clone(),
+                saveable: true,
+            },
+        ];
+        let mut view = TextView::new(SideBySide::new([
+            Buffer::new("original left\n"),
+            Buffer::new("original right\n"),
+        ]));
+        std::fs::write(&files[1].path, b"reloaded \xff\n").unwrap();
+        let mut save_message = None;
+
+        handle_reload(&mut files, &mut view, &mut save_message);
+
+        assert_eq!(view.save_target().unwrap().text, "reloaded \u{fffd}\n");
+        assert!(!files[1].saveable);
     }
 }

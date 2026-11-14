@@ -57,6 +57,7 @@ enum Mode {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ViewEvent {
     Save,
+    Reload,
 }
 
 pub(crate) struct SaveTarget {
@@ -132,8 +133,53 @@ impl TextView {
             palette: Palette::new(&theme),
             theme: Arc::new(theme),
         };
+        view.reset_diff_state();
         view.step_change(1);
         view
+    }
+
+    /// Replaces the compared text, keeping the cursor within the new text.
+    pub(crate) fn reload(&mut self, diff: SideBySide) {
+        let cursor_row = self
+            .cursor_position()
+            .map(|(side, position)| self.diff.row_of(side, position.line));
+        let top_row = self.scroll_to_top_row.unwrap_or(self.top_row);
+        let cursor_offset = cursor_row.map(|row| {
+            row.saturating_sub(top_row)
+                .min(self.rows_in_view.saturating_sub(1))
+        });
+        self.diff = diff;
+        self.cursor_side = self
+            .cursor_side
+            .filter(|&side| !self.diff.buffers()[side].lines().is_empty())
+            .or_else(|| {
+                [1, 0]
+                    .into_iter()
+                    .find(|&side| !self.diff.buffers()[side].lines().is_empty())
+            });
+        if let Some(side) = self.cursor_side {
+            self.cursor.clamp(&self.diff.buffers()[side]);
+        }
+        self.scroll_to_top_row = self.cursor_position().map(|(side, position)| {
+            self.diff
+                .row_of(side, position.line)
+                .saturating_sub(cursor_offset.unwrap_or(CONTEXT_ROWS))
+        });
+        self.reset_diff_state();
+        self.rehighlight(0);
+        self.rehighlight(1);
+    }
+
+    fn reset_diff_state(&mut self) {
+        self.current_change = None;
+        self.top_row = 0;
+        self.rows_in_view = 0;
+        self.mode = Mode::Normal;
+        self.key_handled = false;
+        self.normal_keys.clear();
+        self.insert_keys.clear();
+        self.colors = Default::default();
+        self.colors_received = [0; 2];
     }
 
     /// Starts highlighting both sides on background threads, picking each
@@ -334,6 +380,7 @@ impl TextView {
             Action::RightSide => self.switch_side(1),
             Action::Close => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             Action::Save => return Some(ViewEvent::Save),
+            Action::Reload => return Some(ViewEvent::Reload),
             Action::Insert(at) => self.insert(at),
             Action::OpenLine(at) => self.open_line(at),
             Action::NormalMode => self.leave_insert(),
@@ -1491,5 +1538,124 @@ mod tests {
         assert_eq!(target.side, 1);
         let lines: String = (0..200).map(|i| format!("line {i}\n")).collect();
         assert_eq!(target.text, format!("x{lines}"));
+    }
+
+    #[test]
+    fn reload_shortcut_emits_a_reload_event() {
+        let mut harness = Harness::new_ui_state(
+            |ui, (view, events)| {
+                events.extend(view.process_input(ui));
+                view.show_header(ui, [Path::new("left"), Path::new("right")]);
+                view.show_diff(ui);
+            },
+            (unchanged_file(), Vec::new()),
+        );
+        harness.run();
+        #[cfg(target_os = "macos")]
+        press(&mut harness, "C-r");
+        #[cfg(not(target_os = "macos"))]
+        press(&mut harness, "F5");
+
+        let (_, events) = harness.state();
+        assert_eq!(events, &[ViewEvent::Reload]);
+    }
+
+    #[test]
+    fn reload_replaces_buffers_and_resets_view_state() {
+        let mut view = three_changes();
+        view.step_change(1);
+        view.step_change(1);
+        view.mode = Mode::Insert;
+        view.normal_keys
+            .press(egui::KeyboardShortcut::new(Modifiers::NONE, Key::Z));
+        view.set_theme(Theme::named("Nord").unwrap());
+
+        view.reload(SideBySide::new([
+            Buffer::new("fresh left\n"),
+            Buffer::new("fresh right\n"),
+        ]));
+
+        assert_eq!(view.diff.buffers()[0].lines(), ["fresh left"]);
+        assert_eq!(view.diff.buffers()[1].lines(), ["fresh right"]);
+        assert_eq!(view.cursor_side, Some(1));
+        assert_eq!(view.current_change, None);
+        assert!(view.mode == Mode::Normal);
+        assert_eq!(view.theme.name(), "Nord");
+        assert!(
+            view.normal_keys
+                .press(egui::KeyboardShortcut::new(Modifiers::NONE, Key::T))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn reload_preserves_cursor_position_when_new_buffer_is_large_enough() {
+        let mut view = unchanged_file();
+        view.cursor_side = Some(0);
+        view.cursor.set(
+            &view.diff.buffers()[0],
+            Position {
+                line: 80,
+                column: 3,
+            },
+        );
+
+        let diff = unchanged_file().diff;
+        view.reload(diff);
+
+        assert_eq!(
+            view.cursor_position(),
+            Some((
+                0,
+                Position {
+                    line: 80,
+                    column: 3,
+                }
+            ))
+        );
+    }
+
+    #[test]
+    fn reload_preserves_cursor_row_in_view() {
+        let mut view = unchanged_file();
+        view.cursor_side = Some(0);
+        view.cursor.set(
+            &view.diff.buffers()[0],
+            Position {
+                line: 79,
+                column: 0,
+            },
+        );
+        view.top_row = 60;
+        view.rows_in_view = 20;
+
+        view.reload(unchanged_file().diff);
+
+        let cursor_row = view.diff.row_of(0, view.cursor_position().unwrap().1.line);
+        assert_eq!(view.scroll_to_top_row, Some(60));
+        assert_eq!(cursor_row - view.scroll_to_top_row.unwrap(), 19);
+    }
+
+    #[test]
+    fn reload_clamps_cursor_to_the_end_of_a_shorter_buffer() {
+        let mut view = unchanged_file();
+        view.cursor_side = Some(0);
+        view.cursor.set(
+            &view.diff.buffers()[0],
+            Position {
+                line: 80,
+                column: 5,
+            },
+        );
+
+        view.reload(SideBySide::new([
+            Buffer::new("a\nxy"),
+            Buffer::new("right\n"),
+        ]));
+
+        assert_eq!(
+            view.cursor_position(),
+            Some((0, Position { line: 1, column: 1 }))
+        );
     }
 }

@@ -25,6 +25,10 @@ impl MenuBar {
                         actions.push(MenuAction::Save);
                         ui.close();
                     }
+                    if ui.button("Reload").clicked() {
+                        actions.push(MenuAction::Reload);
+                        ui.close();
+                    }
                 });
                 ui.menu_button("View", |ui| {
                     ui.menu_button("Themes", |ui| {

@@ -33,6 +33,12 @@ impl Cursor {
         self.column = position.column.min(self.last_column(buffer));
     }
 
+    /// Keeps the cursor within the lines and columns of `buffer`.
+    pub fn clamp(&mut self, buffer: &Buffer) {
+        self.go_to_line(buffer, self.line);
+        self.column = self.column.min(self.last_column(buffer));
+    }
+
     /// Places the cursor between characters or on one, at the column it
     /// shows.
     pub fn set_between_characters(&mut self, buffer: &Buffer, between: bool) {

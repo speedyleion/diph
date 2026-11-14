@@ -44,6 +44,7 @@ impl MenuBar {
             .try_iter()
             .filter_map(|event| match event.id.0.as_str() {
                 "save" => Some(MenuAction::Save),
+                "reload" => Some(MenuAction::Reload),
                 id => Theme::names()
                     .find(|&name| name == id)
                     .map(|name| MenuAction::Theme(name.to_owned())),
@@ -52,7 +53,6 @@ impl MenuBar {
         picked
             .into_iter()
             .map(|action| match action {
-                MenuAction::Save => MenuAction::Save,
                 MenuAction::Theme(picked) => {
                     // Choosing an item toggles it, so a chosen theme that was already
                     // checked would be unchecked.
@@ -61,6 +61,7 @@ impl MenuBar {
                     }
                     MenuAction::Theme(picked)
                 }
+                action => action,
             })
             .collect()
     }
@@ -89,6 +90,7 @@ fn menu_bar(themes: &[CheckMenuItem]) -> muda::Result<muda::Menu> {
     let themes = Submenu::with_items("Themes", true, &theme_items)?;
     let view = Submenu::with_items("View", true, &[&themes])?;
     let save = MenuItem::with_id("save", "Save", true, None);
-    let file = Submenu::with_items("File", true, &[&save])?;
+    let reload = MenuItem::with_id("reload", "Reload", true, None);
+    let file = Submenu::with_items("File", true, &[&save, &reload])?;
     muda::Menu::with_items(&[&app, &file, &view])
 }

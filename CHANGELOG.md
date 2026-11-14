@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - zt, zz, and zb vim like navigation.
+- File reload via menu or F5(windows or linux) or Cmd+r (mac)
 
 ## [0.1.4] - 2026-11-09
 
