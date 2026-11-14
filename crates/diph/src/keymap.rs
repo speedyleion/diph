@@ -9,6 +9,8 @@ mod platform;
 #[path = "keymap/other.rs"]
 mod platform;
 
+pub(crate) use platform::{reload_shortcut, save_shortcut};
+
 /// The digit keys, in order from 0.
 const DIGITS: [Key; 10] = [
     Key::Num0,
@@ -122,8 +124,8 @@ pub(crate) fn normal_keymap() -> Keymap<Action> {
         (vec![ctrl(Key::W), key(Key::L)], Action::RightSide),
         (vec![ctrl(Key::W), ctrl(Key::L)], Action::RightSide),
         (vec![shift(Key::Z), shift(Key::Z)], Action::Close),
-        (vec![platform::save_shortcut()], Action::Save),
-        (vec![platform::reload_shortcut()], Action::Reload),
+        (vec![save_shortcut()], Action::Save),
+        (vec![reload_shortcut()], Action::Reload),
         (vec![key(Key::I)], Action::Insert(InsertAt::BeforeCursor)),
         (vec![key(Key::A)], Action::Insert(InsertAt::AfterCursor)),
         (vec![shift(Key::I)], Action::Insert(InsertAt::LineStart)),
@@ -145,7 +147,7 @@ pub(crate) fn insert_keymap() -> Keymap<Action> {
         (vec![key(Key::Enter)], Action::NewLine),
         (vec![key(Key::Tab)], Action::Tab),
         (vec![key(Key::Backspace)], Action::Backspace),
-        (vec![platform::save_shortcut()], Action::Save),
+        (vec![save_shortcut()], Action::Save),
     ])
 }
 
