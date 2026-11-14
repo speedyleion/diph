@@ -1,22 +1,22 @@
-//! The review file: review comments as JSON.
+//! The review file: the comments on several diffs, as JSON.
 
 use std::path::{Path, PathBuf};
 
 use anyhow::Context as _;
 use diph_core::Position;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::comment::{Comment, CommentRange};
 use crate::selection::SelectionKind;
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 struct ReviewFile {
     version: u32,
     comments: Vec<ReviewComment>,
 }
 
 /// A comment as the review file stores it.
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub(crate) struct ReviewComment {
     /// The commented side's path, as shown above it.
     path: PathBuf,
@@ -28,7 +28,7 @@ pub(crate) struct ReviewComment {
     body: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 enum Side {
     Left,
@@ -36,11 +36,11 @@ enum Side {
 }
 
 /// A place in a side's text, counting lines and columns from 1.
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 struct Place {
     line: usize,
     /// Left out for a comment on whole lines.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     column: Option<usize>,
 }
 
@@ -67,14 +67,34 @@ impl ReviewComment {
     }
 }
 
-/// Writes `comments` to the review file `file`.
-pub(crate) fn save(file: &Path, comments: Vec<ReviewComment>) -> anyhow::Result<()> {
-    let review = ReviewFile {
-        version: 1,
-        comments,
-    };
+/// Replaces the comments on `paths` in the review file `file` with
+/// `comments`, keeping the comments on other paths. Creates the file when
+/// it does not exist.
+pub(crate) fn save(
+    file: &Path,
+    paths: [&Path; 2],
+    comments: Vec<ReviewComment>,
+) -> anyhow::Result<()> {
+    let mut review = read(file)?;
+    review
+        .comments
+        .retain(|comment| !paths.contains(&comment.path.as_path()));
+    review.comments.extend(comments);
     let json = serde_json::to_string_pretty(&review)? + "\n";
     std::fs::write(file, json).with_context(|| format!("writing {}", file.display()))
+}
+
+fn read(file: &Path) -> anyhow::Result<ReviewFile> {
+    match std::fs::read(file) {
+        Ok(bytes) => {
+            serde_json::from_slice(&bytes).with_context(|| format!("reading {}", file.display()))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(ReviewFile {
+            version: 1,
+            comments: Vec::new(),
+        }),
+        Err(error) => Err(error).with_context(|| format!("reading {}", file.display())),
+    }
 }
 
 #[cfg(test)]
@@ -101,6 +121,11 @@ mod tests {
             },
             text: text.to_owned(),
         }
+    }
+
+    fn review_comment(path: &str, body: &str) -> ReviewComment {
+        let comment = comment(SelectionKind::Line, body);
+        ReviewComment::new(&comment, Path::new(path), "quote".to_owned())
     }
 
     #[yare::parameterized(
@@ -130,21 +155,36 @@ mod tests {
     }
 
     #[test]
-    fn saving_writes_the_comments_to_a_version_1_file() {
+    fn saving_replaces_the_comments_on_the_diffs_paths_and_keeps_the_rest() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("review.json");
-        let comment = comment(SelectionKind::Line, "body");
-        let comments = vec![ReviewComment::new(
-            &comment,
-            Path::new("a.rs"),
-            "text".to_owned(),
-        )];
+        let kept = vec![review_comment("other.rs", "kept")];
+        save(&file, [Path::new("other.rs"); 2], kept).unwrap();
+        save(
+            &file,
+            [Path::new("a.rs"); 2],
+            vec![review_comment("a.rs", "old")],
+        )
+        .unwrap();
 
-        save(&file, comments).unwrap();
+        save(
+            &file,
+            [Path::new("a.rs"); 2],
+            vec![review_comment("a.rs", "new")],
+        )
+        .unwrap();
 
         let saved: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
-        let bodies = saved["comments"].as_array().map(|comments| comments.len());
-        assert_eq!((saved["version"].as_u64(), bodies), (Some(1), Some(1)));
+        let bodies: Vec<_> = saved["comments"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|comment| comment["body"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            (saved["version"].as_u64(), bodies),
+            (Some(1), vec!["kept", "new"])
+        );
     }
 }
