@@ -234,11 +234,7 @@ impl TextView {
     pub(crate) fn process_input(&mut self, ui: &mut egui::Ui) -> Vec<ViewEvent> {
         let events = ui.input(|i| i.events.clone());
         let mut view_events = Vec::new();
-        for event in &events {
-            if let Some(event) = self.handle(ui.ctx(), event) {
-                view_events.push(event);
-            }
-        }
+        view_events.extend(events.iter().filter_map(|e| self.handle(ui.ctx(), e)));
         view_events
     }
 
