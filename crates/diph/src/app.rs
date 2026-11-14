@@ -1,7 +1,8 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use diph_core::Theme;
+use anyhow::Context as _;
+use diph_core::{Buffer, SideBySide, Theme};
 use eframe::egui;
 
 use crate::menu::{MenuAction, MenuBar};
@@ -15,6 +16,12 @@ pub(crate) struct SideFile {
     pub(crate) path: PathBuf,
     /// Whether the source text can be saved without replacing invalid bytes.
     pub(crate) saveable: bool,
+}
+
+#[derive(Debug)]
+pub(crate) enum FileLoadError {
+    Read(anyhow::Error),
+    Binary,
 }
 
 /// The key the name of the picked theme is saved under between runs.
@@ -59,6 +66,48 @@ impl App {
             startup_time: None,
         }
     }
+}
+
+pub(crate) fn is_null(path: &Path) -> bool {
+    path == Path::new("/dev/null")
+}
+
+pub(crate) fn load_files(files: &mut [SideFile; 2]) -> Result<SideBySide, FileLoadError> {
+    let [left, right] = [read(&files[0].path), read(&files[1].path)];
+    let bytes = match (left, right) {
+        (Ok(left), Ok(right)) => [left, right],
+        (Err(error), _) | (_, Err(error)) => return Err(error),
+    };
+    if bytes.iter().any(|bytes| is_binary(bytes)) {
+        return Err(FileLoadError::Binary);
+    }
+
+    for (file, bytes) in files.iter_mut().zip(&bytes) {
+        file.saveable = can_save(&file.path, bytes);
+    }
+    Ok(text_diff(bytes.each_ref().map(Vec::as_slice)))
+}
+
+fn read(path: &Path) -> Result<Vec<u8>, FileLoadError> {
+    if is_null(path) {
+        return Ok(Vec::new());
+    }
+    std::fs::read(path)
+        .with_context(|| format!("reading {}", path.display()))
+        .map_err(FileLoadError::Read)
+}
+
+fn can_save(path: &Path, bytes: &[u8]) -> bool {
+    !is_null(path) && std::str::from_utf8(bytes).is_ok()
+}
+
+fn is_binary(bytes: &[u8]) -> bool {
+    bytes.iter().take(8000).any(|&b| b == 0)
+}
+
+fn text_diff([left, right]: [&[u8]; 2]) -> SideBySide {
+    let buffer = |bytes| Buffer::new(&String::from_utf8_lossy(bytes));
+    SideBySide::new([buffer(left), buffer(right)])
 }
 
 impl eframe::App for App {
@@ -140,25 +189,18 @@ fn handle_reload(
     view: &mut TextView,
     save_message: &mut Option<String>,
 ) {
-    let [left, right] = [crate::read(&files[0].path), crate::read(&files[1].path)];
-    let bytes = match (left, right) {
-        (Ok(left), Ok(right)) => [left, right],
-        (Err(error), _) | (_, Err(error)) => {
-            *save_message = Some(format!("couldn't reload: {error}"));
-            return;
+    match load_files(files) {
+        Ok(diff) => {
+            view.reload(diff);
+            *save_message = Some("reloaded".to_owned());
         }
-    };
-    if bytes.iter().any(|bytes| crate::is_binary(bytes)) {
-        *save_message = Some("couldn't reload: binary files differ".to_owned());
-        return;
+        Err(FileLoadError::Read(error)) => {
+            *save_message = Some(format!("couldn't reload: {error}"));
+        }
+        Err(FileLoadError::Binary) => {
+            *save_message = Some("couldn't reload: binary files differ".to_owned());
+        }
     }
-
-    let diff = crate::text_diff(bytes.each_ref().map(Vec::as_slice));
-    for (file, bytes) in files.iter_mut().zip(bytes) {
-        file.saveable = crate::can_save(&file.path, &bytes);
-    }
-    view.reload(diff);
-    *save_message = Some("reloaded".to_owned());
 }
 
 fn handle_save_target(
@@ -204,7 +246,7 @@ fn save_theme(storage: &mut dyn eframe::Storage, theme: &str) {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::time::Duration;
 
     use diph_core::{Buffer, SideBySide, Theme};
@@ -215,7 +257,10 @@ mod tests {
     use crate::palette::Palette;
     use crate::text_view::{SaveTarget, TextView};
 
-    use super::{SideFile, handle_menu_action, handle_reload, handle_save_target, show_status};
+    use super::{
+        SideFile, can_save as is_saveable, handle_menu_action, handle_reload, handle_save_target,
+        is_binary as contains_nul, show_status,
+    };
 
     fn test_view() -> TextView {
         TextView::new(SideBySide::new([
@@ -238,6 +283,29 @@ mod tests {
                 saveable: right_saveable,
             },
         ]
+    }
+
+    #[test]
+    fn dev_null_reads_as_empty_even_where_it_does_not_exist() {
+        assert_eq!(super::read(Path::new("/dev/null")).unwrap(), b"");
+    }
+
+    #[yare::parameterized(
+        nul_byte_within_the_first_8000_bytes = { b"text\0more".to_vec(), true },
+        text_without_a_nul_byte = { "café\r\n".as_bytes().to_vec(), false },
+        nul_byte_after_the_first_8000_bytes = { [vec![b'a'; 8000], vec![0]].concat(), false },
+    )]
+    fn is_binary(bytes: Vec<u8>, binary: bool) {
+        assert_eq!(contains_nul(&bytes), binary);
+    }
+
+    #[yare::parameterized(
+        a_file = { "a.txt", b"text\n", true },
+        dev_null = { "/dev/null", b"", false },
+        a_file_that_is_not_utf_8 = { "a.txt", b"caf\xe9\n", false },
+    )]
+    fn can_save(path: &str, bytes: &[u8], saveable: bool) {
+        assert_eq!(is_saveable(Path::new(path), bytes), saveable);
     }
 
     #[test]
