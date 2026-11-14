@@ -156,8 +156,7 @@ fn main() -> anyhow::Result<()> {
             save_path: save_file(&args.right, &right),
         },
     ];
-    let labels = [files[0].label.clone(), files[1].label.clone()];
-    let view = TextView::new(diff, labels);
+    let view = TextView::new(diff);
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_inner_size([1400.0, 900.0]),

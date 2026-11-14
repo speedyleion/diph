@@ -78,7 +78,8 @@ impl eframe::App for App {
         }
         let started = self.started;
         let startup_time = *self.startup_time.get_or_insert_with(|| started.elapsed());
-        self.view.show_header(ui);
+        self.view
+            .show_header(ui, [&self.files[0].label, &self.files[1].label]);
         show_status(
             ui,
             self.view.is_insert_mode(),
@@ -164,12 +165,10 @@ fn save_theme(storage: &mut dyn eframe::Storage, theme: &str) {
 
 #[cfg(test)]
 mod tests {
-
     use std::path::PathBuf;
     use std::time::Duration;
 
     use diph_core::{Buffer, SideBySide, Theme};
-
     use eframe::egui;
     use egui_kittest::{Harness, kittest::Queryable as _};
 
@@ -180,10 +179,10 @@ mod tests {
     use super::{SideFile, handle_menu_action, handle_save_request, show_status};
 
     fn test_view() -> TextView {
-        TextView::new(
-            SideBySide::new([Buffer::new("left\n"), Buffer::new("right\n")]),
-            [PathBuf::from("left.rs"), PathBuf::from("right.rs")],
-        )
+        TextView::new(SideBySide::new([
+            Buffer::new("left\n"),
+            Buffer::new("right\n"),
+        ]))
     }
 
     fn test_files(right_save_path: Option<PathBuf>) -> [SideFile; 2] {
