@@ -23,6 +23,7 @@ use crate::keymap::{
     Action, InsertAt, Keymap, OpenLineAt, insert_keymap, normal_keymap, pressed_key,
 };
 use crate::palette::{CHANGED_MARK, ONE_SIDED_MARK, Palette};
+use crate::selection::{Selection, SelectionKind};
 
 /// Width of the cursor in insert mode, a bar before its column.
 const CURSOR_BAR_WIDTH: f32 = 2.0;
@@ -80,6 +81,7 @@ pub struct TextView {
     cursor_side: Option<usize>,
     /// The cursor in the buffer of `cursor_side`.
     cursor: Cursor,
+    selection: Option<Selection>,
     mode: Mode,
     /// Whether the last key pressed was bound to an action, so the text it
     /// typed is not inserted.
@@ -116,6 +118,7 @@ impl TextView {
         let mut view = Self {
             cursor_side,
             cursor: Cursor::default(),
+            selection: None,
             diff,
             current_change: None,
             scroll_to_top_row: None,
@@ -175,6 +178,7 @@ impl TextView {
         self.top_row = 0;
         self.rows_in_view = 0;
         self.mode = Mode::Normal;
+        self.selection = None;
         self.key_handled = false;
         self.normal_keys.clear();
         self.insert_keys.clear();
@@ -377,6 +381,9 @@ impl TextView {
             Action::Close => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             Action::Save => return Some(ViewEvent::Save),
             Action::Reload => return Some(ViewEvent::Reload),
+            Action::StartCharacterSelection => self.start_selection(SelectionKind::Character),
+            Action::StartLineSelection => self.start_selection(SelectionKind::Line),
+            Action::CancelSelection => self.selection = None,
             Action::Insert(at) => self.insert(at),
             Action::OpenLine(at) => self.open_line(at),
             Action::NormalMode => self.leave_insert(),
@@ -440,6 +447,7 @@ impl TextView {
 
     /// Switches to insert mode with the cursor at `at`.
     fn insert(&mut self, at: InsertAt) {
+        self.selection = None;
         self.mode = Mode::Insert;
         self.move_cursor(|c, b| match at {
             InsertAt::BeforeCursor => {
@@ -464,6 +472,7 @@ impl TextView {
         let Some(side) = self.cursor_side else {
             return;
         };
+        self.selection = None;
         let buffer = &self.diff.buffers()[side];
         let current = self.cursor.position(buffer);
         let (line, column) = match at {
@@ -498,6 +507,12 @@ impl TextView {
         Some((side, self.cursor.position(&self.diff.buffers()[side])))
     }
 
+    fn start_selection(&mut self, kind: SelectionKind) {
+        if let Some((side, anchor)) = self.cursor_position() {
+            self.selection = Some(Selection::new(kind, side, anchor));
+        }
+    }
+
     /// Moves the cursor to the line of `side` across from it, keeping its
     /// column. Stays put when `side` has no lines.
     fn switch_side(&mut self, side: usize) {
@@ -508,6 +523,9 @@ impl TextView {
         let Some(line) = self.diff.line_at(side, row) else {
             return;
         };
+        if from != side {
+            self.selection = None;
+        }
         self.cursor_side = Some(side);
         self.move_cursor(|c, b| c.go_to_line(b, line));
     }
@@ -641,6 +659,12 @@ impl TextView {
                 .last()
         });
         if let Some((side, clicked)) = output.inner {
+            if self
+                .selection
+                .is_some_and(|selection| selection.side != side)
+            {
+                self.selection = None;
+            }
             self.cursor_side = Some(side);
             self.cursor.set(&self.diff.buffers()[side], clicked);
         }
@@ -1562,6 +1586,11 @@ mod tests {
         view.step_change(1);
         view.step_change(1);
         view.mode = Mode::Insert;
+        view.selection = Some(Selection::new(
+            SelectionKind::Character,
+            1,
+            Position { line: 0, column: 0 },
+        ));
         view.normal_keys
             .press(egui::KeyboardShortcut::new(Modifiers::NONE, Key::Z));
         view.set_theme(Theme::named("Nord").unwrap());
@@ -1576,6 +1605,7 @@ mod tests {
         assert_eq!(view.cursor_side, Some(1));
         assert_eq!(view.current_change, None);
         assert!(view.mode == Mode::Normal);
+        assert_eq!(view.selection, None);
         assert_eq!(view.theme.name(), "Nord");
         assert!(
             view.normal_keys
@@ -1653,5 +1683,57 @@ mod tests {
             view.cursor_position(),
             Some((0, Position { line: 1, column: 1 }))
         );
+    }
+
+    #[yare::parameterized(
+        character_selection_extends_right = {
+            "v l",
+            SelectionKind::Character,
+            Position { line: 0, column: 0 },
+            Position { line: 0, column: 1 },
+        },
+        line_selection_extends_down = {
+            "V j",
+            SelectionKind::Line,
+            Position { line: 0, column: 0 },
+            Position { line: 1, column: 0 },
+        },
+    )]
+    fn visual_selection_keeps_its_anchor_while_motions_move_the_cursor(
+        keys: &str,
+        kind: SelectionKind,
+        anchor: Position,
+        active: Position,
+    ) {
+        let harness = typed_in_unchanged_file(keys);
+
+        assert_eq!(
+            harness.state().selection,
+            Some(Selection::new(kind, 1, anchor))
+        );
+        assert_eq!(harness.state().cursor_position(), Some((1, active)));
+    }
+
+    #[test]
+    fn escape_cancels_visual_selection() {
+        let harness = typed_in_unchanged_file("v l Escape");
+
+        assert_eq!(harness.state().selection, None);
+    }
+
+    #[test]
+    fn switching_sides_cancels_visual_selection() {
+        let harness = typed_in_unchanged_file("v C-w h");
+
+        assert_eq!(harness.state().selection, None);
+        assert_eq!(harness.state().cursor_side, Some(0));
+    }
+
+    #[test]
+    fn entering_insert_mode_cancels_visual_selection() {
+        let harness = typed_in_unchanged_file("v i");
+
+        assert_eq!(harness.state().selection, None);
+        assert!(harness.state().is_insert_mode());
     }
 }

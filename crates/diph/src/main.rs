@@ -3,6 +3,7 @@ mod cursor;
 mod keymap;
 mod menu;
 mod palette;
+mod selection;
 mod text_view;
 
 use std::ffi::OsString;
