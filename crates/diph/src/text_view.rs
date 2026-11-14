@@ -24,6 +24,7 @@ use crate::keymap::{
 };
 use crate::palette::{CHANGED_MARK, ONE_SIDED_MARK, Palette};
 use crate::selection::{Selection, SelectionKind};
+use crate::view_rows::{ViewRow, ViewRows};
 
 /// Width of the cursor in insert mode, a bar before its column.
 const CURSOR_BAR_WIDTH: f32 = 2.0;
@@ -71,11 +72,11 @@ pub struct TextView {
     diff: SideBySide,
     /// Index into `diff.changes()` of the change last jumped to.
     current_change: Option<usize>,
-    /// Row to scroll to the top of the view on the next frame.
+    /// Row of the view to scroll to its top on the next frame.
     scroll_to_top_row: Option<usize>,
-    /// Top row wholly in view in the last frame.
+    /// Top row of the view wholly in view in the last frame.
     top_row: usize,
-    /// Rows wholly in view in the last frame.
+    /// Rows of the view wholly in view in the last frame.
     rows_in_view: usize,
     /// The side with the cursor, 0 for the left and 1 for the right. `None`
     /// when neither side has lines.
@@ -146,7 +147,7 @@ impl TextView {
     pub(crate) fn reload(&mut self, diff: SideBySide) {
         let cursor_row = self
             .cursor_position()
-            .map(|(side, position)| self.diff.row_of(side, position.line));
+            .map(|(side, position)| self.view_row_of(side, position.line));
         let top_row = self.scroll_to_top_row.unwrap_or(self.top_row);
         let cursor_offset = cursor_row.map(|row| {
             row.saturating_sub(top_row)
@@ -165,8 +166,7 @@ impl TextView {
             self.cursor.clamp(&self.diff.buffers()[side]);
         }
         self.scroll_to_top_row = self.cursor_position().map(|(side, position)| {
-            self.diff
-                .row_of(side, position.line)
+            self.view_row_of(side, position.line)
                 .saturating_sub(cursor_offset.unwrap_or(CONTEXT_ROWS))
         });
         self.reset_diff_state();
@@ -301,10 +301,12 @@ impl TextView {
         let rows_builder = UiBuilder::new().max_rect(rows_rect);
         let in_view = ui.scope_builder(rows_builder, |ui| self.rows_ui(ui)).inner;
 
-        let y = map_y(map, self.diff.rows().len(), in_view.end - in_view.start);
+        let view_rows = self.view_rows();
+        let y = map_y(map, view_rows.len(), in_view.end - in_view.start);
+        let diff_row_y = |row: f32| y(view_rows.view_row(row as usize) as f32);
         let painter = ui.painter();
         painter.rect_filled(map, 0.0, self.palette.filler);
-        for (mark, color) in change_marks(self.diff.rows(), map, &y) {
+        for (mark, color) in change_marks(self.diff.rows(), map, diff_row_y) {
             painter.rect_filled(mark, 0.0, color);
         }
         let cover = Rect::from_x_y_ranges(map.x_range(), y(in_view.start)..=y(in_view.end));
@@ -511,6 +513,16 @@ impl TextView {
         });
     }
 
+    /// The rows the view shows.
+    fn view_rows(&self) -> ViewRows {
+        ViewRows::new(self.diff.rows().len(), Vec::new())
+    }
+
+    /// The row of the view that shows `line` of `side`.
+    fn view_row_of(&self, side: usize, line: usize) -> usize {
+        self.view_rows().view_row(self.diff.row_of(side, line))
+    }
+
     /// The side with the cursor, and where the cursor is in its buffer.
     fn cursor_position(&self) -> Option<(usize, Position)> {
         let side = self.cursor_side?;
@@ -548,7 +560,7 @@ impl TextView {
         };
         move_it(&mut self.cursor, &self.diff.buffers()[side]);
         let line = self.cursor.position(&self.diff.buffers()[side]).line;
-        let row = self.diff.row_of(side, line);
+        let row = self.view_row_of(side, line);
         let rows_in_view = self.rows_in_view.max(1);
         let top_row = self.scroll_to_top_row.unwrap_or(self.top_row);
         if row < top_row {
@@ -568,7 +580,8 @@ impl TextView {
             return;
         };
         let rows_in_view = self.rows_in_view.max(1);
-        let max_top = self.diff.rows().len().saturating_sub(rows_in_view);
+        let view_rows = self.view_rows();
+        let max_top = view_rows.len().saturating_sub(rows_in_view);
         let old_top = self.scroll_to_top_row.unwrap_or(self.top_row);
         let top = self
             .scroll_to_top_row
@@ -576,18 +589,14 @@ impl TextView {
             .saturating_add_signed(rows.saturating_mul(count))
             .min(max_top);
         self.scroll_to_top_row = Some(top);
+        let cursor_row = self.view_row_of(side, position.line);
         let row = match top == old_top {
-            true => self
-                .diff
-                .row_of(side, position.line)
+            true => cursor_row
                 .saturating_add_signed(rows.saturating_mul(count))
-                .min(self.diff.rows().len().saturating_sub(1)),
-            false => self
-                .diff
-                .row_of(side, position.line)
-                .clamp(top, top + rows_in_view.saturating_sub(1)),
+                .min(view_rows.len().saturating_sub(1)),
+            false => cursor_row.clamp(top, top + rows_in_view.saturating_sub(1)),
         };
-        let Some(line) = self.diff.line_at(side, row) else {
+        let Some(line) = self.diff.line_at(side, view_rows.at(row).diff_row()) else {
             return;
         };
         self.move_cursor(|c, b| c.go_to_line(b, line));
@@ -600,7 +609,7 @@ impl TextView {
             return;
         };
         let rows_in_view = self.rows_in_view.max(1);
-        let row = self.diff.row_of(side, position.line);
+        let row = self.view_row_of(side, position.line);
         self.scroll_to_top_row = Some(top_row(row, rows_in_view));
     }
 
@@ -616,7 +625,8 @@ impl TextView {
         };
         self.current_change = Some(next);
         let row = self.diff.changes()[next];
-        self.scroll_to_top_row = Some(row.saturating_sub(CONTEXT_ROWS));
+        let view_row = self.view_rows().view_row(row);
+        self.scroll_to_top_row = Some(view_row.saturating_sub(CONTEXT_ROWS));
         if let Some(side) = self.cursor_side
             && let Some(line) = self.diff.line_at(side, row)
         {
@@ -650,29 +660,33 @@ impl TextView {
         };
 
         ui.spacing_mut().item_spacing.y = 0.0;
+        let view_rows = self.view_rows();
         let mut area = ScrollArea::vertical().auto_shrink(false);
         if let Some(row) = self.scroll_to_top_row.take() {
             // Clamped so rows near the end don't overscroll and bounce back.
             let row_height = layout.row_height;
-            let max_offset = rows.len() as f32 * row_height - ui.available_height();
+            let max_offset = view_rows.len() as f32 * row_height - ui.available_height();
             let offset = row as f32 * row_height;
             area = area.vertical_scroll_offset(offset.min(max_offset).max(0.0));
         }
         let cursor = self.cursor_position();
         let selection = self.selection;
-        let output = area.show_rows(ui, layout.row_height, rows.len(), |ui, range| {
+        let output = area.show_rows(ui, layout.row_height, view_rows.len(), |ui, range| {
             // `last` paints every row, keeping the click if one was clicked.
-            rows[range]
-                .iter()
-                .filter_map(|row| {
-                    layout.paint_row(
+            range
+                .filter_map(|view_row| match view_rows.at(view_row) {
+                    ViewRow::Diff(row) => layout.paint_row(
                         ui,
                         self.diff.buffers(),
                         &self.colors,
-                        row,
+                        &rows[row],
                         cursor,
                         selection,
-                    )
+                    ),
+                    ViewRow::Gap { .. } => {
+                        layout.paint_gap(ui);
+                        None
+                    }
                 })
                 .last()
         });
@@ -904,6 +918,11 @@ impl RowLayout {
         let divider = Stroke::new(1.0, self.palette.divider);
         painter.vline(left.right(), rect.y_range(), divider);
         clicked
+    }
+
+    /// Takes up a row of a gap, leaving it blank.
+    fn paint_gap(&self, ui: &mut egui::Ui) {
+        ui.allocate_space(vec2(ui.available_width(), self.row_height));
     }
 
     /// Paints the cursor at `column` of a line in `half` whose `glyphs` are

@@ -5,6 +5,7 @@ mod menu;
 mod palette;
 mod selection;
 mod text_view;
+mod view_rows;
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
