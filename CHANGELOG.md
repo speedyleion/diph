@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - File reload via menu or F5(windows or linux) or Cmd+r (mac)
 - Ability to highlight text with v or V
 - Ability to copy highlighted text with y
+- Review comments: c opens a comment box under the selection, or under
+  the cursor's line, and Ctrl+Enter (Cmd+Enter on macOS) saves it there
 
 ## [0.1.4] - 2026-11-09
 

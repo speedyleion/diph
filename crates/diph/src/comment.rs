@@ -11,8 +11,8 @@ pub(crate) struct CommentRange {
     pub(crate) range: SelectionRange,
 }
 
-/// A comment being written.
-pub(crate) struct Draft {
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Comment {
     pub(crate) range: CommentRange,
     pub(crate) text: String,
 }

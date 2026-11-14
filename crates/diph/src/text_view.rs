@@ -19,7 +19,7 @@ use itertools::{
     Itertools as _,
 };
 
-use crate::comment::{CommentRange, Draft};
+use crate::comment::{Comment, CommentRange};
 use crate::cursor::Cursor;
 use crate::keymap::{
     Action, InsertAt, Keymap, OpenLineAt, comment_keymap, insert_keymap, normal_keymap, pressed_key,
@@ -75,6 +75,28 @@ enum Handled {
     Left,
 }
 
+/// Which comment a comment box shows.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Shows {
+    /// The saved comment at this index.
+    Saved(usize),
+    Draft,
+}
+
+/// A comment box under the last line its comment is on.
+struct CommentBox {
+    gap: Gap,
+    /// 0 for the left side, 1 for the right.
+    side: usize,
+    shows: Shows,
+}
+
+/// The text a comment box holds.
+enum BoxText<'a> {
+    Saved(&'a str),
+    Draft(&'a mut String),
+}
+
 pub(crate) struct SaveTarget {
     pub(crate) side: usize,
     pub(crate) text: String,
@@ -96,8 +118,9 @@ pub struct TextView {
     /// The cursor in the buffer of `cursor_side`.
     cursor: Cursor,
     selection: Option<Selection>,
+    comments: Vec<Comment>,
     /// The comment being written in comment mode.
-    draft: Option<Draft>,
+    draft: Option<Comment>,
     /// The gaps under comment boxes in the last frame.
     gaps: Vec<Gap>,
     mode: Mode,
@@ -138,6 +161,7 @@ impl TextView {
             cursor_side,
             cursor: Cursor::default(),
             selection: None,
+            comments: Vec::new(),
             draft: None,
             gaps: Vec::new(),
             diff,
@@ -437,6 +461,11 @@ impl TextView {
             Action::StartLineSelection => self.start_selection(SelectionKind::Line),
             Action::CancelSelection => self.selection = None,
             Action::Comment => self.start_comment(),
+            Action::SaveComment => {
+                let draft = self.draft.take().filter(|draft| !draft.text.is_empty());
+                self.comments.extend(draft);
+                self.mode = Mode::Normal;
+            }
             Action::DiscardComment => {
                 self.draft = None;
                 self.mode = Mode::Normal;
@@ -568,6 +597,36 @@ impl TextView {
         self.view_rows().view_row(self.diff.row_of(side, line))
     }
 
+    /// The boxes of the saved comments and the draft, in the order of the
+    /// rows they follow.
+    fn comment_boxes(&self, ui: &egui::Ui, layout: &RowLayout) -> Vec<CommentBox> {
+        let saved = self.comments.iter().enumerate();
+        let saved = saved.map(|(index, comment)| (comment, Shows::Saved(index)));
+        let draft = self.draft.iter().map(|draft| (draft, Shows::Draft));
+        let mut boxes: Vec<_> = saved
+            .chain(draft)
+            .map(|(comment, shows)| self.comment_box(ui, layout, comment, shows))
+            .collect();
+        boxes.sort_by_key(|comment_box| comment_box.gap.after);
+        boxes
+    }
+
+    /// The box of `comment`, under its last line.
+    fn comment_box(
+        &self,
+        ui: &egui::Ui,
+        layout: &RowLayout,
+        comment: &Comment,
+        shows: Shows,
+    ) -> CommentBox {
+        let CommentRange { side, range, .. } = comment.range;
+        let gap = Gap {
+            after: self.diff.row_of(side, range.end.line),
+            rows: layout.comment_rows(ui, &comment.text),
+        };
+        CommentBox { gap, side, shows }
+    }
+
     /// The side with the cursor, and where the cursor is in its buffer.
     fn cursor_position(&self) -> Option<(usize, Position)> {
         let side = self.cursor_side?;
@@ -593,7 +652,7 @@ impl TextView {
             kind: selection.kind,
             range: selection.range(active),
         };
-        self.draft = Some(Draft {
+        self.draft = Some(Comment {
             range,
             text: String::new(),
         });
@@ -665,7 +724,7 @@ impl TextView {
                 .min(view_rows.len().saturating_sub(1)),
             false => cursor_row.clamp(top, top + rows_in_view.saturating_sub(1)),
         };
-        let Some(line) = self.diff.line_at(side, view_rows.at(row).diff_row()) else {
+        let Some(line) = self.diff.line_at(side, view_rows.diff_row(row)) else {
             return;
         };
         self.move_cursor(|c, b| c.go_to_line(b, line));
@@ -728,17 +787,13 @@ impl TextView {
         };
 
         ui.spacing_mut().item_spacing.y = 0.0;
-        let draft_gap = self.draft.as_ref().map(|draft| Gap {
-            after: self
-                .diff
-                .row_of(draft.range.side, draft.range.range.end.line),
-            rows: layout.comment_rows(ui, &draft.text),
-        });
-        let gaps: Vec<_> = draft_gap.into_iter().collect();
+        let boxes = self.comment_boxes(ui, &layout);
+        let gaps: Vec<_> = boxes.iter().map(|comment_box| comment_box.gap).collect();
         if gaps != self.gaps {
             self.gaps = gaps;
             // Keeps the comment box in view as it opens and grows.
-            if let Some(gap) = draft_gap {
+            let draft_box = boxes.iter().find(|b| b.shows == Shows::Draft);
+            if let Some(gap) = draft_box.map(|comment_box| comment_box.gap) {
                 self.scroll_to_show(self.view_rows().view_row(gap.after) + gap.rows);
             }
         }
@@ -754,6 +809,7 @@ impl TextView {
         let cursor = self.cursor_position();
         let selection = self.selection;
         let rows = self.diff.rows();
+        let comments = &self.comments;
         let draft = &mut self.draft;
         let output = area.show_rows(ui, layout.row_height, view_rows.len(), |ui, range| {
             let first_in_view = range.start;
@@ -768,9 +824,13 @@ impl TextView {
                         cursor,
                         selection,
                     ),
-                    ViewRow::Gap { gap, row } => {
+                    ViewRow::Gap { index, row } => {
                         let paint_box = row == 0 || view_row == first_in_view;
-                        layout.paint_gap(ui, gap, row, draft.as_mut()?, paint_box);
+                        let text = match boxes[index].shows {
+                            Shows::Saved(index) => BoxText::Saved(&comments[index].text),
+                            Shows::Draft => BoxText::Draft(&mut draft.as_mut()?.text),
+                        };
+                        layout.paint_gap(ui, &boxes[index], row, text, paint_box);
                         None
                     }
                 })
@@ -1015,21 +1075,21 @@ impl RowLayout {
         galley.rows.len() + 1
     }
 
-    /// Paints row `row` of `gap`, under `draft`'s last line, with filler on
-    /// the other side. When `paint_box`, also paints `draft`'s box over the
-    /// whole gap.
+    /// Paints row `row` of the gap `comment_box` takes, with filler on the
+    /// other side. When `paint_box`, also paints the box over the whole gap,
+    /// holding `text`.
     fn paint_gap(
         &self,
         ui: &mut egui::Ui,
-        gap: Gap,
+        comment_box: &CommentBox,
         row: usize,
-        draft: &mut Draft,
+        text: BoxText<'_>,
         paint_box: bool,
     ) {
         let size = vec2(ui.available_width(), self.row_height);
         let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
         let (left, right) = rect.split_left_right_at_x(rect.left() + self.half_width);
-        let (commented, other) = match draft.range.side {
+        let (commented, other) = match comment_box.side {
             0 => (left, right),
             _ => (right, left),
         };
@@ -1037,31 +1097,38 @@ impl RowLayout {
         let painter = ui.painter();
         painter.rect_filled(other, 0.0, self.palette.filler);
         painter.vline(left.right(), rect.y_range(), divider);
-        if paint_box {
-            let top = rect.top() - row as f32 * self.row_height;
-            let bottom = top + gap.rows as f32 * self.row_height;
-            let x = commented.left() + self.gutter_width..=commented.right() - self.char_width;
-            let box_rect = Rect::from_x_y_ranges(x, top..=bottom);
-            self.paint_comment_box(ui, box_rect, &mut draft.text);
+        if !paint_box {
+            return;
+        }
+        let top = rect.top() - row as f32 * self.row_height;
+        let bottom = top + comment_box.gap.rows as f32 * self.row_height;
+        let x = commented.left() + self.gutter_width..=commented.right() - self.char_width;
+        let box_rect = Rect::from_x_y_ranges(x, top..=bottom);
+        let (fill, stroke) = (self.palette.filler, StrokeKind::Inside);
+        painter.rect(box_rect, 2.0, fill, divider, stroke);
+        let text_rect = box_rect.shrink2(vec2(self.char_width, self.row_height / 2.0));
+        match text {
+            BoxText::Saved(text) => {
+                let (font, color) = (self.font.clone(), self.palette.text);
+                let galley = painter.layout(text.to_owned(), font, color, text_rect.width());
+                painter.galley(text_rect.min, galley, color);
+            }
+            BoxText::Draft(text) => self.edit_comment(ui, text_rect, text),
         }
     }
 
-    /// Paints a comment box over `rect`, holding a text box that edits
-    /// `text` and keeps the keyboard focus.
-    fn paint_comment_box(&self, ui: &mut egui::Ui, rect: Rect, text: &mut String) {
-        let divider = Stroke::new(1.0, self.palette.divider);
-        let (fill, stroke) = (self.palette.filler, StrokeKind::Inside);
-        ui.painter().rect(rect, 2.0, fill, divider, stroke);
-        let text_rect = rect.shrink2(vec2(self.char_width, self.row_height / 2.0));
+    /// Lays out a text box over `rect` that edits `text` and keeps the
+    /// keyboard focus.
+    fn edit_comment(&self, ui: &mut egui::Ui, rect: Rect, text: &mut String) {
         let edit = egui::TextEdit::multiline(text)
             .id_salt("comment")
             .hint_text("Comment")
             .font(self.font.clone())
             .frame(egui::Frame::NONE)
             .margin(0.0)
-            .desired_width(text_rect.width())
+            .desired_width(rect.width())
             .desired_rows(1);
-        let response = ui.new_child(UiBuilder::new().max_rect(text_rect)).add(edit);
+        let response = ui.new_child(UiBuilder::new().max_rect(rect)).add(edit);
         if !response.has_focus() {
             response.request_focus();
         }
@@ -2404,5 +2471,35 @@ mod tests {
         let harness = typed_in_unchanged_file(keys);
 
         assert_eq!(harness.state().gaps, vec![gap]);
+    }
+
+    #[yare::parameterized(
+        ctrl_enter_saves_the_comment = { "c x C-Enter", vec!["x"] },
+        an_empty_comment_is_not_saved = { "c C-Enter", vec![] },
+        escape_does_not_save_the_comment = { "c x Escape", vec![] },
+    )]
+    fn saved_comments(keys: &str, texts: Vec<&str>) {
+        let harness = typed_in_unchanged_file(keys);
+
+        let view = harness.state();
+        let saved: Vec<_> = view.comments.iter().map(|c| c.text.as_str()).collect();
+        assert_eq!((saved, view.mode_label()), (texts, None));
+    }
+
+    #[yare::parameterized(
+        a_saved_comment_keeps_its_box_beside_the_draft = {
+            "c x C-Enter j c", vec![Gap { after: 0, rows: 2 }, Gap { after: 1, rows: 2 }]
+        },
+        boxes_follow_the_order_of_their_lines = {
+            "j c x C-Enter k c", vec![Gap { after: 0, rows: 2 }, Gap { after: 1, rows: 2 }]
+        },
+        boxes_under_one_line_follow_each_other = {
+            "c x Enter y C-Enter c", vec![Gap { after: 0, rows: 3 }, Gap { after: 0, rows: 2 }]
+        },
+    )]
+    fn comment_boxes(keys: &str, gaps: Vec<Gap>) {
+        let harness = typed_in_unchanged_file(keys);
+
+        assert_eq!(harness.state().gaps, gaps);
     }
 }

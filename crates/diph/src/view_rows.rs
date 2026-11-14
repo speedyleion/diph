@@ -13,23 +13,13 @@ pub(crate) struct Gap {
 pub(crate) enum ViewRow {
     /// A row of the diff.
     Diff(usize),
-    /// Row `row` of `gap`, counting from 0.
-    Gap { gap: Gap, row: usize },
-}
-
-impl ViewRow {
-    /// The row of the diff shown, or the one the gap follows.
-    pub(crate) fn diff_row(self) -> usize {
-        match self {
-            Self::Diff(row) => row,
-            Self::Gap { gap, .. } => gap.after,
-        }
-    }
+    /// Row `row`, counting from 0, of the gap at `index` of the gaps.
+    Gap { index: usize, row: usize },
 }
 
 pub(crate) struct ViewRows {
     diff_rows: usize,
-    /// In the order of the rows they follow, at most one per row.
+    /// In the order of the rows they follow.
     gaps: Vec<Gap>,
 }
 
@@ -53,22 +43,28 @@ impl ViewRows {
     pub(crate) fn at(&self, row: usize) -> ViewRow {
         let mut diff_row = 0;
         let mut rest = row;
-        for gap in &self.gaps {
+        for (index, gap) in self.gaps.iter().enumerate() {
             let rows_before_gap = gap.after + 1 - diff_row;
             if rest < rows_before_gap {
                 break;
             }
             rest -= rows_before_gap;
             if rest < gap.rows {
-                return ViewRow::Gap {
-                    gap: *gap,
-                    row: rest,
-                };
+                return ViewRow::Gap { index, row: rest };
             }
             rest -= gap.rows;
             diff_row = gap.after + 1;
         }
         ViewRow::Diff(diff_row + rest)
+    }
+
+    /// The row of the diff at row `row` of the view, or the one before it
+    /// when `row` is in a gap.
+    pub(crate) fn diff_row(&self, row: usize) -> usize {
+        match self.at(row) {
+            ViewRow::Diff(row) => row,
+            ViewRow::Gap { index, .. } => self.gaps[index].after,
+        }
     }
 }
 
@@ -102,13 +98,22 @@ mod tests {
 
     #[yare::parameterized(
         a_row_before_any_gap = { 2, ViewRow::Diff(2) },
-        the_first_row_of_a_gap = { 3, ViewRow::Gap { gap: FIRST_GAP, row: 0 } },
-        the_last_row_of_a_gap = { 4, ViewRow::Gap { gap: FIRST_GAP, row: 1 } },
+        the_first_row_of_a_gap = { 3, ViewRow::Gap { index: 0, row: 0 } },
+        the_last_row_of_a_gap = { 4, ViewRow::Gap { index: 0, row: 1 } },
         the_row_after_a_gap = { 5, ViewRow::Diff(3) },
-        a_row_of_the_second_gap = { 10, ViewRow::Gap { gap: SECOND_GAP, row: 2 } },
+        a_row_of_the_second_gap = { 10, ViewRow::Gap { index: 1, row: 2 } },
         the_last_row = { 14, ViewRow::Diff(9) },
     )]
     fn at(view_row: usize, shows: ViewRow) {
         assert_eq!(with_gaps().at(view_row), shows);
+    }
+
+    #[test]
+    fn gaps_after_one_row_follow_each_other() {
+        let gaps = vec![Gap { after: 0, rows: 1 }, Gap { after: 0, rows: 2 }];
+
+        let shows = ViewRows::new(2, gaps).at(2);
+
+        assert_eq!(shows, ViewRow::Gap { index: 1, row: 0 });
     }
 }
