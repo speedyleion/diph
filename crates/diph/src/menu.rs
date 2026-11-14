@@ -13,6 +13,7 @@ mod platform;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MenuAction {
     Save,
+    Reload,
     Theme(String),
 }
 
