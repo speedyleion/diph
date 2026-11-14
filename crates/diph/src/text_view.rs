@@ -25,7 +25,8 @@ use crate::keymap::{
     Action, InsertAt, Keymap, OpenLineAt, comment_keymap, insert_keymap, normal_keymap, pressed_key,
 };
 use crate::palette::{CHANGED_MARK, ONE_SIDED_MARK, Palette};
-use crate::selection::{Selection, SelectionKind};
+use crate::review::ReviewComment;
+use crate::selection::{Selection, SelectionKind, SelectionRange};
 use crate::view_rows::{Gap, ViewRow, ViewRows};
 
 /// Width of the cursor in insert mode, a bar before its column.
@@ -65,6 +66,8 @@ pub(crate) enum ViewEvent {
     Save,
     Reload,
     Yank(String),
+    /// A comment was saved.
+    CommentsChanged,
 }
 
 /// What the view did with an input event.
@@ -454,7 +457,8 @@ impl TextView {
                 if side != selection.side {
                     return None;
                 }
-                let text = selected_text(&self.diff.buffers()[side], selection, active)?;
+                let buffer = &self.diff.buffers()[side];
+                let text = selected_text(buffer, selection.kind, selection.range(active))?;
                 return Some(ViewEvent::Yank(text));
             }
             Action::StartCharacterSelection => self.start_selection(SelectionKind::Character),
@@ -463,8 +467,10 @@ impl TextView {
             Action::Comment => self.start_comment(),
             Action::SaveComment => {
                 let draft = self.draft.take().filter(|draft| !draft.text.is_empty());
-                self.comments.extend(draft);
                 self.mode = Mode::Normal;
+                let saved = draft.is_some();
+                self.comments.extend(draft);
+                return saved.then_some(ViewEvent::CommentsChanged);
             }
             Action::DiscardComment => {
                 self.draft = None;
@@ -488,6 +494,22 @@ impl TextView {
         self.colors[side].apply(&edit);
         self.rehighlight(side);
         edit
+    }
+
+    /// The saved comments as the review file stores them, with the left
+    /// and right side shown as `paths`.
+    pub(crate) fn review_comments(&self, paths: [&Path; 2]) -> Vec<ReviewComment> {
+        let comments = self.comments.iter();
+        comments
+            .map(|comment| self.review_comment(comment, paths))
+            .collect()
+    }
+
+    /// `comment` as the review file stores it.
+    fn review_comment(&self, comment: &Comment, paths: [&Path; 2]) -> ReviewComment {
+        let CommentRange { side, kind, range } = comment.range;
+        let quote = selected_text(&self.diff.buffers()[side], kind, range);
+        ReviewComment::new(comment, paths[side], quote.unwrap_or_default())
     }
 
     pub(crate) fn save_target(&self) -> Option<SaveTarget> {
@@ -1357,9 +1379,8 @@ fn selected_bytes(
     Some(start..end)
 }
 
-fn selected_text(buffer: &Buffer, selection: Selection, active: Position) -> Option<String> {
+fn selected_text(buffer: &Buffer, kind: SelectionKind, range: SelectionRange) -> Option<String> {
     let lines = buffer.lines();
-    let range = selection.range(active);
     let start_line = lines.get(range.start.line)?;
     let end_line = lines.get(range.end.line)?;
     let text = buffer.text();
@@ -1372,7 +1393,7 @@ fn selected_text(buffer: &Buffer, selection: Selection, active: Position) -> Opt
     };
     let start_line_start = line_start(range.start.line);
     let end_line_start = line_start(range.end.line);
-    let (start, end) = match selection.kind {
+    let (start, end) = match kind {
         SelectionKind::Line => {
             let end = end_line_start + end_line.len();
             let end = end + usize::from(text[end..].starts_with(line_ending)) * line_ending.len();
@@ -1403,7 +1424,6 @@ fn column_at(glyphs: &[Glyph], x: f32) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::selection::SelectionRange;
     use eframe::egui::{Key, Modifiers, text::ByteIndex};
     use egui_kittest::{Harness, kittest::Queryable as _};
 
@@ -2386,7 +2406,7 @@ mod tests {
         let selection = Selection::new(kind, 1, anchor);
 
         assert_eq!(
-            selected_text(&buffer, selection, active).as_deref(),
+            selected_text(&buffer, kind, selection.range(active)).as_deref(),
             Some(expected)
         );
     }
@@ -2501,5 +2521,42 @@ mod tests {
         let harness = typed_in_unchanged_file(keys);
 
         assert_eq!(harness.state().gaps, gaps);
+    }
+
+    #[yare::parameterized(
+        saving_a_comment = { "c x C-Enter", vec![ViewEvent::CommentsChanged] },
+        not_saving_an_empty_comment = { "c C-Enter", vec![] },
+    )]
+    fn comments_changed_event(keys: &str, expected: Vec<ViewEvent>) {
+        let mut harness = Harness::new_ui_state(
+            |ui, (view, events)| {
+                events.extend(view.process_input(ui));
+                view.show_diff(ui);
+            },
+            (unchanged_file(), Vec::new()),
+        );
+        harness.run();
+        press(&mut harness, keys);
+
+        assert_eq!(harness.state().1, expected);
+    }
+
+    #[test]
+    fn review_comments_quote_the_commented_lines_of_their_side() {
+        let harness = typed_in_unchanged_file("j V j c x C-Enter");
+
+        let paths = [Path::new("old.rs"), Path::new("new.rs")];
+        let comments = harness.state().review_comments(paths);
+
+        let json = serde_json::to_value(comments).unwrap();
+        let expected = serde_json::json!([{
+            "path": "new.rs",
+            "side": "right",
+            "start": { "line": 2 },
+            "end": { "line": 3 },
+            "quote": "line 1\nline 2\n",
+            "body": "x",
+        }]);
+        assert_eq!(json, expected);
     }
 }

@@ -7,6 +7,7 @@ use eframe::egui;
 
 use crate::menu::{MenuAction, MenuBar};
 use crate::palette::Palette;
+use crate::review;
 use crate::text_view::{SaveTarget, TextView, ViewEvent};
 
 pub(crate) struct SideFile {
@@ -30,6 +31,8 @@ const THEME_KEY: &str = "theme";
 pub(crate) struct App {
     view: TextView,
     files: [SideFile; 2],
+    /// The review file comments are saved in.
+    review: Option<PathBuf>,
     menu: MenuBar,
     theme: &'static str,
     save_message: Option<String>,
@@ -42,12 +45,14 @@ impl App {
         mut view: TextView,
         files: [SideFile; 2],
         paths: [PathBuf; 2],
+        review: Option<PathBuf>,
         started: Instant,
-        storage: Option<&dyn eframe::Storage>,
-        ctx: &egui::Context,
+        cc: &eframe::CreationContext<'_>,
         wake: impl Fn() + Send + Sync + 'static,
     ) -> Self {
-        let theme = storage
+        let ctx = &cc.egui_ctx;
+        let theme = cc
+            .storage
             .and_then(|storage| storage.get_string(THEME_KEY))
             .and_then(|name| Theme::named(&name))
             .unwrap_or_default();
@@ -59,6 +64,7 @@ impl App {
         Self {
             view,
             files,
+            review,
             menu,
             theme: theme_name,
             save_message: None,
@@ -129,6 +135,7 @@ impl eframe::App for App {
                 &ctx,
                 &mut self.files,
                 &mut self.view,
+                self.review.as_deref(),
                 &mut self.save_message,
             );
         }
@@ -163,12 +170,30 @@ fn handle_view_event(
     ctx: &egui::Context,
     files: &mut [SideFile; 2],
     view: &mut TextView,
+    review: Option<&Path>,
     save_message: &mut Option<String>,
 ) {
     match event {
         ViewEvent::Save => handle_save_target(files, save_message, view.save_target()),
         ViewEvent::Reload => handle_reload(files, view, save_message),
         ViewEvent::Yank(text) => ctx.copy_text(text),
+        ViewEvent::CommentsChanged => save_review(files, view, review, save_message),
+    }
+}
+
+/// Saves `view`'s comments in the `review` file, if there is one.
+fn save_review(
+    files: &[SideFile; 2],
+    view: &TextView,
+    review: Option<&Path>,
+    save_message: &mut Option<String>,
+) {
+    let Some(review) = review else {
+        return;
+    };
+    let paths = [files[0].label.as_path(), files[1].label.as_path()];
+    if let Err(error) = review::save(review, view.review_comments(paths)) {
+        *save_message = Some(format!("couldn't save the review: {error:#}"));
     }
 }
 
@@ -403,6 +428,7 @@ mod tests {
             &ctx,
             &mut files,
             &mut view,
+            None,
             &mut save_message,
         );
 
