@@ -649,12 +649,20 @@ impl TextView {
             area = area.vertical_scroll_offset(offset.min(max_offset).max(0.0));
         }
         let cursor = self.cursor_position();
+        let selection = self.selection;
         let output = area.show_rows(ui, layout.row_height, rows.len(), |ui, range| {
             // `last` paints every row, keeping the click if one was clicked.
             rows[range]
                 .iter()
                 .filter_map(|row| {
-                    layout.paint_row(ui, self.diff.buffers(), &self.colors, row, cursor)
+                    layout.paint_row(
+                        ui,
+                        self.diff.buffers(),
+                        &self.colors,
+                        row,
+                        cursor,
+                        selection,
+                    )
                 })
                 .last()
         });
@@ -813,6 +821,16 @@ struct RowLayout {
     palette: Palette,
 }
 
+struct HalfLine<'a> {
+    rect: Rect,
+    line: &'a Line,
+    text: &'a str,
+    spans: &'a [Span],
+    background: Option<Color32>,
+    selection: Option<Selection>,
+    active: Option<Position>,
+}
+
 impl RowLayout {
     /// Paints `row` across both halves, with each side's text from its
     /// buffer, a divider between them, and the cursor if it is on one of the
@@ -825,6 +843,7 @@ impl RowLayout {
         colors: &[SideColors; 2],
         row: &Row,
         cursor: Option<(usize, Position)>,
+        selection: Option<Selection>,
     ) -> Option<(usize, Position)> {
         let size = vec2(ui.available_width(), self.row_height);
         let (rect, response) = ui.allocate_exact_size(size, Sense::CLICK);
@@ -846,7 +865,22 @@ impl RowLayout {
             };
             let text = &buffers[side].lines()[line.index];
             let spans = colors[side].line(line);
-            let (pos, galley) = self.paint_half(ui, half, line, text, spans, background);
+            let selection = selection.filter(|selection| selection.side == side);
+            let active = cursor
+                .filter(|(cursor_side, _)| *cursor_side == side)
+                .map(|(_, p)| p);
+            let (pos, galley) = self.paint_half(
+                ui,
+                HalfLine {
+                    rect: half,
+                    line,
+                    text,
+                    spans,
+                    background,
+                    selection,
+                    active,
+                },
+            );
             let glyphs = galley.rows.first().map_or(&[][..], |r| &r.glyphs);
             if let Some((_, c)) = cursor.filter(|(s, c)| *s == side && c.line == line.index) {
                 self.paint_cursor(painter, half, pos, glyphs, c.column);
@@ -894,22 +928,35 @@ impl RowLayout {
 
     /// Paints one half of a row that has a line: the background, the line
     /// number, and the line's `text` in the colors of its spans, clipped to
-    /// the half, with its changed words highlighted. Returns where the text
-    /// starts, and its layout.
-    fn paint_half(
-        &self,
-        ui: &egui::Ui,
-        half: Rect,
-        line: &Line,
-        text: &str,
-        spans: &[Span],
-        background: Option<Color32>,
-    ) -> (Pos2, Arc<Galley>) {
+    /// the half, with its changed words and selection highlighted. Returns
+    /// where the text starts, and its layout.
+    fn paint_half(&self, ui: &egui::Ui, half: HalfLine<'_>) -> (Pos2, Arc<Galley>) {
+        let HalfLine {
+            rect: half,
+            line,
+            text,
+            spans,
+            background,
+            selection,
+            active,
+        } = half;
         let painter = ui.painter();
         let mid_y = half.center().y;
         let gutter_right = half.left() + self.gutter_width;
+        let selected_line = selection.zip(active).is_some_and(|(selection, active)| {
+            selection.kind == SelectionKind::Line
+                && (selection.range(active).start.line..=selection.range(active).end.line)
+                    .contains(&line.index)
+        });
         if let Some(background) = background {
             painter.rect_filled(half, 0.0, background);
+        }
+        if selected_line {
+            painter.rect_filled(
+                half,
+                0.0,
+                self.selection_background(background.unwrap_or(self.palette.background)),
+            );
         }
         let number = (line.index + 1).to_string();
         let pos = pos2(gutter_right - self.char_width, mid_y);
@@ -922,7 +969,16 @@ impl RowLayout {
         );
 
         let text_rect = Rect::from_min_max(pos2(gutter_right, half.top()), half.max);
-        let galley = ui.fonts_mut(|f| f.layout_job(self.line_job(line, text, spans)));
+        let galley = ui.fonts_mut(|f| {
+            f.layout_job(self.line_job(
+                line,
+                text,
+                spans,
+                background.unwrap_or(self.palette.background),
+                selection,
+                active,
+            ))
+        });
         let pos = pos2(gutter_right, mid_y - galley.size().y / 2.0);
         painter
             .with_clip_rect(text_rect)
@@ -930,31 +986,50 @@ impl RowLayout {
         (pos, galley)
     }
 
-    /// Lays out `line`'s `text` in the colors of `spans`, with its changed
-    /// words on the palette's changed word background.
-    fn line_job(&self, line: &Line, text: &str, spans: &[Span]) -> LayoutJob {
+    /// Lays out `line`'s `text` with syntax, diff, and selection formatting.
+    fn line_job(
+        &self,
+        line: &Line,
+        text: &str,
+        spans: &[Span],
+        row_background: Color32,
+        selection: Option<Selection>,
+        active: Option<Position>,
+    ) -> LayoutJob {
+        let selected = selection
+            .zip(active)
+            .and_then(|(selection, active)| selected_bytes(selection, active, line, text));
         let color_starts = spans.iter().map(|span| {
             let [r, g, b] = span.rgb;
             (span.range.start, Color32::from_rgb(r, g, b))
         });
-        let changed_word = self.palette.changed_word;
-        let background_starts = (line.changed_words.iter())
-            .flat_map(|r| [(r.start, changed_word), (r.end, Color32::TRANSPARENT)]);
+        let background_starts = background_starts(
+            &line.changed_words,
+            selected,
+            self.palette.changed_word,
+            self.selection_background(row_background),
+            self.selection_background(self.palette.changed_word),
+        );
         let mut job = LayoutJob::default();
         let (mut start, mut color, mut background) = (0, self.palette.text, Color32::TRANSPARENT);
-        // Each event starts a new color, a new background, or both.
         for event in color_starts.merge_join_by(background_starts, |a, b| a.0.cmp(&b.0)) {
             let end = event.as_ref().reduce(|a, _| a).0;
             self.append_piece(&mut job, &text[start..end], color, background);
             start = end;
             match event {
-                Left((_, c)) => color = c,
-                Right((_, b)) => background = b,
-                Both((_, c), (_, b)) => (color, background) = (c, b),
+                Left((_, new_color)) => color = new_color,
+                Right((_, new_background)) => background = new_background,
+                Both((_, new_color), (_, new_background)) => {
+                    (color, background) = (new_color, new_background)
+                }
             }
         }
         self.append_piece(&mut job, &text[start..], color, background);
         job
+    }
+
+    fn selection_background(&self, background: Color32) -> Color32 {
+        background.lerp_to_gamma(self.palette.selection, 0.5)
     }
 
     /// Appends `text` to `job` in `color` on `background`, unless it is empty.
@@ -972,6 +1047,78 @@ impl RowLayout {
     }
 }
 
+fn background_starts<'a>(
+    changed_words: &'a [Range<usize>],
+    selection: Option<Range<usize>>,
+    changed_word_background: Color32,
+    selected_background: Color32,
+    selected_changed_word_background: Color32,
+) -> impl Iterator<Item = (usize, Color32)> + 'a {
+    let changed_word_starts = changed_words
+        .iter()
+        .flat_map(|range| [(range.start, true), (range.end, false)]);
+    let selection_starts = selection
+        .into_iter()
+        .flat_map(|range| [(range.start, true), (range.end, false)]);
+    changed_word_starts
+        .merge_join_by(selection_starts, |a, b| a.0.cmp(&b.0))
+        .scan((false, false), move |(changed_word, selected), event| {
+            let position = match event {
+                Left((position, active)) => {
+                    *changed_word = active;
+                    position
+                }
+                Right((position, active)) => {
+                    *selected = active;
+                    position
+                }
+                Both((position, changed_word_active), (_, selected_active)) => {
+                    *changed_word = changed_word_active;
+                    *selected = selected_active;
+                    position
+                }
+            };
+            let background = match (*changed_word, *selected) {
+                (true, true) => selected_changed_word_background,
+                (true, false) => changed_word_background,
+                (false, true) => selected_background,
+                (false, false) => Color32::TRANSPARENT,
+            };
+            Some((position, background))
+        })
+}
+
+fn selected_bytes(
+    selection: Selection,
+    active: Position,
+    line: &Line,
+    text: &str,
+) -> Option<Range<usize>> {
+    let range = selection.range(active);
+    if !(range.start.line..=range.end.line).contains(&line.index) {
+        return None;
+    }
+    if selection.kind == SelectionKind::Line {
+        return Some(0..text.len());
+    }
+    let start_column = if line.index == range.start.line {
+        range.start.column
+    } else {
+        0
+    };
+    let end_column = if line.index == range.end.line {
+        range.end.column.saturating_add(1)
+    } else {
+        text.chars().count()
+    };
+    let start = text.char_indices().nth(start_column)?.0;
+    let end = text
+        .char_indices()
+        .nth(end_column)
+        .map_or(text.len(), |(byte, _)| byte);
+    Some(start..end)
+}
+
 /// The index of the glyph of `glyphs`, laid out from 0, that `x` is on, or
 /// of the last glyph when `x` is past it.
 fn column_at(glyphs: &[Glyph], x: f32) -> usize {
@@ -982,7 +1129,7 @@ fn column_at(glyphs: &[Glyph], x: f32) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use eframe::egui::{Key, Modifiers};
+    use eframe::egui::{Key, Modifiers, text::ByteIndex};
     use egui_kittest::{Harness, kittest::Queryable as _};
 
     fn show_view(ui: &mut egui::Ui, view: &mut TextView) {
@@ -1735,5 +1882,176 @@ mod tests {
 
         assert_eq!(harness.state().selection, None);
         assert!(harness.state().is_insert_mode());
+    }
+
+    fn row_layout() -> RowLayout {
+        RowLayout {
+            font: FontId::monospace(14.0),
+            char_width: 8.0,
+            gutter_width: 0.0,
+            row_height: 18.0,
+            half_width: 100.0,
+            bar_cursor: false,
+            palette: Palette::new(&Theme::default()),
+        }
+    }
+
+    #[test]
+    fn character_selection_highlights_inclusive_unicode_glyphs_over_changed_words() {
+        let layout = row_layout();
+        let line = Line {
+            index: 0,
+            changed_words: std::iter::once(1..5).collect(),
+        };
+        let spans = [
+            (0..1, [255, 0, 0]),
+            (1..3, [0, 255, 0]),
+            (3..5, [0, 0, 255]),
+        ]
+        .into_iter()
+        .map(|(range, rgb)| Span { range, rgb })
+        .collect::<Vec<_>>();
+        let selection =
+            Selection::new(SelectionKind::Character, 1, Position { line: 0, column: 2 });
+        let active = Position { line: 0, column: 1 };
+
+        let job = layout.line_job(
+            &line,
+            "aébc",
+            &spans,
+            layout.palette.changed,
+            Some(selection),
+            Some(active),
+        );
+        let selected_background = layout.selection_background(layout.palette.changed_word);
+        let selected: Vec<_> = job
+            .sections
+            .iter()
+            .filter(|section| section.format.background == selected_background)
+            .map(|section| (section.byte_range.clone(), section.format.color))
+            .collect();
+
+        assert_eq!(
+            selected,
+            vec![
+                (ByteIndex(1)..ByteIndex(3), Color32::from_rgb(0, 255, 0)),
+                (ByteIndex(3)..ByteIndex(4), Color32::from_rgb(0, 0, 255)),
+            ]
+        );
+        assert!(job.sections.iter().any(|section| {
+            section.byte_range == (ByteIndex(4)..ByteIndex(5))
+                && section.format.background == layout.palette.changed_word
+        }));
+    }
+
+    #[test]
+    fn line_selection_covers_complete_lines() {
+        let layout = row_layout();
+        let selection = Selection::new(SelectionKind::Line, 1, Position { line: 0, column: 0 });
+        let active = Position { line: 1, column: 1 };
+        let line = Line {
+            index: 1,
+            changed_words: Vec::new(),
+        };
+
+        let selected = selected_bytes(selection, active, &line, "last");
+        let job = layout.line_job(
+            &line,
+            "last",
+            &[],
+            layout.palette.background,
+            Some(selection),
+            Some(active),
+        );
+
+        assert_eq!(selected, Some(0..4));
+        assert_eq!(job.sections[0].byte_range, ByteIndex(0)..ByteIndex(4));
+        assert_eq!(
+            job.sections[0].format.background,
+            layout.selection_background(layout.palette.background)
+        );
+        assert_eq!(
+            selected_bytes(
+                selection,
+                active,
+                &Line {
+                    index: 2,
+                    changed_words: Vec::new()
+                },
+                "next"
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn overlapping_selection_blends_with_changed_word_background() {
+        let layout = row_layout();
+        let changed_words = std::iter::once(2..6).collect::<Vec<_>>();
+        let backgrounds = background_starts(
+            &changed_words,
+            Some(4..8),
+            layout.palette.changed_word,
+            layout.selection_background(layout.palette.changed),
+            layout.selection_background(layout.palette.changed_word),
+        )
+        .collect::<Vec<_>>();
+
+        assert_eq!(
+            backgrounds,
+            vec![
+                (2, layout.palette.changed_word),
+                (4, layout.selection_background(layout.palette.changed_word)),
+                (6, layout.selection_background(layout.palette.changed)),
+                (8, Color32::TRANSPARENT),
+            ]
+        );
+    }
+
+    #[test]
+    fn adjacent_changed_word_ranges_keep_their_background() {
+        let layout = row_layout();
+        let backgrounds = background_starts(
+            &[1..3, 3..4],
+            None,
+            layout.palette.changed_word,
+            layout.selection_background(layout.palette.changed),
+            layout.selection_background(layout.palette.changed_word),
+        )
+        .collect::<Vec<_>>();
+
+        assert_eq!(
+            backgrounds,
+            vec![
+                (1, layout.palette.changed_word),
+                (3, Color32::TRANSPARENT),
+                (3, layout.palette.changed_word),
+                (4, Color32::TRANSPARENT),
+            ]
+        );
+    }
+
+    #[test]
+    fn separate_selection_and_changed_word_ranges_keep_their_backgrounds() {
+        let layout = row_layout();
+        let changed_words = std::iter::once(1..3).collect::<Vec<_>>();
+        let backgrounds = background_starts(
+            &changed_words,
+            Some(5..7),
+            layout.palette.changed_word,
+            layout.selection_background(layout.palette.changed),
+            layout.selection_background(layout.palette.changed_word),
+        )
+        .collect::<Vec<_>>();
+
+        assert_eq!(
+            backgrounds,
+            vec![
+                (1, layout.palette.changed_word),
+                (3, Color32::TRANSPARENT),
+                (5, layout.selection_background(layout.palette.changed)),
+                (7, Color32::TRANSPARENT),
+            ]
+        );
     }
 }
