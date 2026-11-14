@@ -1,7 +1,7 @@
 use diph_core::Theme;
 use eframe::egui;
 
-use crate::menu::MenuAction;
+use crate::{keymap, menu::MenuAction};
 
 pub struct MenuBar {
     theme: &'static str,
@@ -21,11 +21,15 @@ impl MenuBar {
         egui::Panel::top("menu_bar").show(ui, |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
                 ui.menu_button("File", |ui| {
-                    if ui.button("Save").clicked() {
+                    let save = egui::Button::new("Save")
+                        .shortcut_text(ui.ctx().format_shortcut(&keymap::save_shortcut()));
+                    if ui.add(save).clicked() {
                         actions.push(MenuAction::Save);
                         ui.close();
                     }
-                    if ui.button("Reload").clicked() {
+                    let reload = egui::Button::new("Reload")
+                        .shortcut_text(ui.ctx().format_shortcut(&keymap::reload_shortcut()));
+                    if ui.add(reload).clicked() {
                         actions.push(MenuAction::Reload);
                         ui.close();
                     }

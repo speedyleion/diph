@@ -4,10 +4,10 @@ use diph_core::Theme;
 use eframe::egui;
 use muda::{
     CheckMenuItem, IsMenuItem, MenuEvent, MenuItem, PredefinedMenuItem, Submenu,
-    accelerator::{Accelerator, Code, Modifiers},
+    accelerator::{Key as MudaKey, KeyAccelerator, Modifiers},
 };
 
-use crate::menu::MenuAction;
+use crate::{keymap, menu::MenuAction};
 
 /// The app's menus in the system menu bar.
 pub struct MenuBar {
@@ -92,18 +92,52 @@ fn menu_bar(themes: &[CheckMenuItem]) -> muda::Result<muda::Menu> {
         themes.iter().map(|item| item as &dyn IsMenuItem).collect();
     let themes = Submenu::with_items("Themes", true, &theme_items)?;
     let view = Submenu::with_items("View", true, &[&themes])?;
-    let save = MenuItem::with_id(
-        "save",
-        "Save",
-        true,
-        Some(Accelerator::new(Modifiers::META, Code::KeyS)),
-    );
-    let reload = MenuItem::with_id(
-        "reload",
-        "Reload",
-        true,
-        Some(Accelerator::new(Modifiers::META, Code::KeyR)),
-    );
+    let save = MenuItem::with_id("save", "Save", true, None);
+    save.set_key_accelerator(accelerator(keymap::save_shortcut()))?;
+    let reload = MenuItem::with_id("reload", "Reload", true, None);
+    reload.set_key_accelerator(accelerator(keymap::reload_shortcut()))?;
     let file = Submenu::with_items("File", true, &[&save, &reload])?;
     muda::Menu::with_items(&[&app, &file, &view])
+}
+
+fn accelerator(shortcut: egui::KeyboardShortcut) -> Option<KeyAccelerator> {
+    let modifiers = [
+        (shortcut.modifiers.command, Modifiers::META),
+        (shortcut.modifiers.ctrl, Modifiers::CONTROL),
+        (shortcut.modifiers.alt, Modifiers::ALT),
+        (shortcut.modifiers.shift, Modifiers::SHIFT),
+    ]
+    .into_iter()
+    .filter_map(|(pressed, modifier)| pressed.then_some(modifier))
+    .fold(Modifiers::empty(), |modifiers, modifier| {
+        modifiers | modifier
+    });
+    let key = match shortcut.logical_key {
+        egui::Key::S => MudaKey::Character("s".to_owned()),
+        egui::Key::R => MudaKey::Character("r".to_owned()),
+        egui::Key::F => MudaKey::Character("f".to_owned()),
+        _ => return None,
+    };
+    Some(KeyAccelerator::new(modifiers, key))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accelerator_maps_combined_modifiers_and_logical_key() {
+        let shortcut = egui::KeyboardShortcut::new(
+            egui::Modifiers::COMMAND | egui::Modifiers::ALT,
+            egui::Key::F,
+        );
+
+        assert_eq!(
+            accelerator(shortcut),
+            Some(KeyAccelerator::new(
+                Modifiers::META | Modifiers::ALT,
+                MudaKey::Character("f".to_owned()),
+            )),
+        );
+    }
 }
