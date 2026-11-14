@@ -15,8 +15,8 @@ use diph_core::{Buffer, SideBySide};
 use eframe::egui;
 use winit::event_loop::{EventLoop, EventLoopProxy};
 
-use app::App;
-use text_view::{SideFile, TextView};
+use app::{App, SideFile};
+use text_view::TextView;
 
 /// A side-by-side diff tool.
 ///
@@ -146,15 +146,18 @@ fn main() -> anyhow::Result<()> {
     // Non-UTF-8 text shows U+FFFD in place of the bytes it can't decode.
     let buffer = |bytes| Buffer::new(&String::from_utf8_lossy(bytes));
     let diff = SideBySide::new([buffer(&left), buffer(&right)]);
-    let left_file = SideFile {
-        label: shown(&args.left, args.label(0)),
-        save_path: save_file(&args.left, &left),
-    };
-    let right_file = SideFile {
-        label: shown(&args.right, args.label(1)),
-        save_path: save_file(&args.right, &right),
-    };
-    let view = TextView::new(diff, left_file, right_file, started);
+    let files = [
+        SideFile {
+            label: shown(&args.left, args.label(0)),
+            save_path: save_file(&args.left, &left),
+        },
+        SideFile {
+            label: shown(&args.right, args.label(1)),
+            save_path: save_file(&args.right, &right),
+        },
+    ];
+    let labels = [files[0].label.clone(), files[1].label.clone()];
+    let view = TextView::new(diff, labels, started);
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_inner_size([1400.0, 900.0]),
@@ -170,6 +173,7 @@ fn main() -> anyhow::Result<()> {
                 .send_viewport_cmd(egui::ViewportCommand::Title(format!("{name} — diph")));
             Ok(Box::new(App::new(
                 view,
+                files,
                 paths,
                 cc.storage,
                 &cc.egui_ctx,
