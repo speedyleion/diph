@@ -157,7 +157,7 @@ fn main() -> anyhow::Result<()> {
         },
     ];
     let labels = [files[0].label.clone(), files[1].label.clone()];
-    let view = TextView::new(diff, labels, started);
+    let view = TextView::new(diff, labels);
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_inner_size([1400.0, 900.0]),
@@ -175,6 +175,7 @@ fn main() -> anyhow::Result<()> {
                 view,
                 files,
                 paths,
+                started,
                 cc.storage,
                 &cc.egui_ctx,
                 wake_event_loop(proxy),
