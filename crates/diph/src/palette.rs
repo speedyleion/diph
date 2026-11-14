@@ -7,6 +7,8 @@ use eframe::egui::{self, Color32};
 pub const ONE_SIDED_MARK: Color32 = Color32::from_rgb(0x2f, 0x8f, 0x55);
 /// Change map mark of changed lines, and the tint of their background.
 pub const CHANGED_MARK: Color32 = Color32::from_rgb(0x3d, 0x6f, 0xc4);
+/// Gutter and change map mark of commented lines.
+pub const COMMENT_MARK: Color32 = Color32::from_rgb(0xd0, 0x9b, 0x3c);
 
 /// The colors the view paints with.
 #[derive(Clone, Copy)]
