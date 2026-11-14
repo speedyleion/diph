@@ -148,6 +148,7 @@ impl eframe::App for App {
             self.view.mode_label(),
             self.save_message.as_deref(),
             startup_time,
+            self.review.as_deref(),
         );
         self.view.show_diff(ui);
     }
@@ -260,6 +261,7 @@ fn show_status(
     mode_label: Option<&str>,
     save_message: Option<&str>,
     startup_time: Duration,
+    review: Option<&Path>,
 ) {
     egui::Panel::bottom("status_bar").show(ui, |ui| {
         ui.horizontal(|ui| {
@@ -270,6 +272,10 @@ fn show_status(
                 ui.label(message);
             }
             ui.weak(format!("started in {} ms", startup_time.as_millis()));
+            if let Some(review) = review {
+                let right = egui::Layout::right_to_left(egui::Align::Center);
+                ui.with_layout(right, |ui| ui.weak(format!("review: {}", review.display())));
+            }
         });
     });
 }
@@ -376,7 +382,7 @@ mod tests {
     }
 
     #[test]
-    fn status_bar_shows_mode_feedback_and_startup_time() {
+    fn status_bar_shows_mode_feedback_startup_time_and_review_file() {
         let mut harness = Harness::new_ui_state(
             |ui, ()| {
                 show_status(
@@ -384,6 +390,7 @@ mod tests {
                     Some("-- INSERT --"),
                     Some("saved right.rs"),
                     Duration::from_millis(12),
+                    Some(Path::new("review.json")),
                 )
             },
             (),
@@ -394,6 +401,7 @@ mod tests {
         harness.get_by_label("-- INSERT --");
         harness.get_by_label("saved right.rs");
         harness.get_by_label("started in 12 ms");
+        harness.get_by_label("review: review.json");
     }
 
     #[test]
