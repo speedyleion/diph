@@ -70,6 +70,8 @@ pub(crate) enum Action {
     CancelSelection,
     /// Opens a comment box on the selection or the cursor's line.
     Comment,
+    NextComment,
+    PrevComment,
     SaveComment,
     DiscardComment,
     Insert(InsertAt),
@@ -139,6 +141,14 @@ pub(crate) fn normal_keymap() -> Keymap<Action> {
         (vec![shift(Key::V)], Action::StartLineSelection),
         (vec![key(Key::Escape)], Action::CancelSelection),
         (vec![key(Key::C)], Action::Comment),
+        (
+            vec![key(Key::CloseBracket), key(Key::C)],
+            Action::NextComment,
+        ),
+        (
+            vec![key(Key::OpenBracket), key(Key::C)],
+            Action::PrevComment,
+        ),
         (vec![key(Key::I)], Action::Insert(InsertAt::BeforeCursor)),
         (vec![key(Key::A)], Action::Insert(InsertAt::AfterCursor)),
         (vec![shift(Key::I)], Action::Insert(InsertAt::LineStart)),

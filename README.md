@@ -22,3 +22,5 @@ specifies a file to save review comments to. Comments from multiple files can be
 written to the same review file. Re-opening a file in `diph` and adding or
 removing comments will replace all comments in the review file for the file(s)
 being diffed.
+
+`]c` and `[c` move to the next and previous comment
