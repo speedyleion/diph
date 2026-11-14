@@ -878,6 +878,8 @@ dependencies = [
  "egui_kittest",
  "itertools",
  "muda",
+ "serde",
+ "serde_json",
  "tempfile",
  "winit",
  "yare",

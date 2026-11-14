@@ -4,6 +4,7 @@ mod cursor;
 mod keymap;
 mod menu;
 mod palette;
+mod review;
 mod selection;
 mod text_view;
 mod view_rows;
@@ -37,6 +38,9 @@ struct Args {
     /// also picks the side's syntax highlighting.
     #[arg(long)]
     label: Vec<PathBuf>,
+    /// The JSON file to save review comments in.
+    #[arg(long)]
+    review: Option<PathBuf>,
 }
 
 impl Args {
@@ -150,9 +154,9 @@ fn main() -> anyhow::Result<()> {
                 view,
                 files,
                 paths,
+                args.review,
                 started,
-                cc.storage,
-                &cc.egui_ctx,
+                cc,
                 wake_event_loop(proxy),
             )))
         }),
