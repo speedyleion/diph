@@ -2,7 +2,10 @@ use std::sync::mpsc::{Receiver, channel};
 
 use diph_core::Theme;
 use eframe::egui;
-use muda::{CheckMenuItem, IsMenuItem, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
+use muda::{
+    CheckMenuItem, IsMenuItem, MenuEvent, MenuItem, PredefinedMenuItem, Submenu,
+    accelerator::{Accelerator, Code, Modifiers},
+};
 
 use crate::menu::MenuAction;
 
@@ -89,8 +92,18 @@ fn menu_bar(themes: &[CheckMenuItem]) -> muda::Result<muda::Menu> {
         themes.iter().map(|item| item as &dyn IsMenuItem).collect();
     let themes = Submenu::with_items("Themes", true, &theme_items)?;
     let view = Submenu::with_items("View", true, &[&themes])?;
-    let save = MenuItem::with_id("save", "Save", true, None);
-    let reload = MenuItem::with_id("reload", "Reload", true, None);
+    let save = MenuItem::with_id(
+        "save",
+        "Save",
+        true,
+        Some(Accelerator::new(Modifiers::META, Code::KeyS)),
+    );
+    let reload = MenuItem::with_id(
+        "reload",
+        "Reload",
+        true,
+        Some(Accelerator::new(Modifiers::META, Code::KeyR)),
+    );
     let file = Submenu::with_items("File", true, &[&save, &reload])?;
     muda::Menu::with_items(&[&app, &file, &view])
 }
