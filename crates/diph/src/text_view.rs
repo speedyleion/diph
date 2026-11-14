@@ -61,7 +61,6 @@ pub(crate) struct SaveRequest {
 
 pub struct TextView {
     diff: SideBySide,
-    labels: [PathBuf; 2],
     pending_save: Option<SaveRequest>,
     /// Index into `diff.changes()` of the change last jumped to.
     current_change: Option<usize>,
@@ -103,8 +102,8 @@ pub struct TextView {
 }
 
 impl TextView {
-    /// A view of `diff` with the names shown above each side.
-    pub fn new(diff: SideBySide, labels: [PathBuf; 2]) -> Self {
+    /// A view of `diff`.
+    pub fn new(diff: SideBySide) -> Self {
         let buffers = diff.buffers();
         // The right side, unless only the left has lines.
         let cursor_side = [1, 0].into_iter().find(|&s| !buffers[s].lines().is_empty());
@@ -113,7 +112,6 @@ impl TextView {
             cursor_side,
             cursor: Cursor::default(),
             diff,
-            labels,
             pending_save: None,
             current_change: None,
             scroll_to_top_row: None,
@@ -191,7 +189,7 @@ impl TextView {
         }
     }
 
-    pub(crate) fn show_header(&mut self, ui: &mut egui::Ui) {
+    pub(crate) fn show_header(&mut self, ui: &mut egui::Ui, labels: [&Path; 2]) {
         egui::Panel::top("text_header").show(ui, |ui| {
             ui.horizontal(|ui| {
                 // Without keyboard focus, which Tab would give and Space or
@@ -213,7 +211,7 @@ impl TextView {
                 ui.label(format!("change {current} of {}", self.diff.changes().len()));
             });
             ui.columns(2, |cols| {
-                for (column, label) in cols.iter_mut().zip(&self.labels) {
+                for (column, label) in cols.iter_mut().zip(labels) {
                     let font = TextStyle::Monospace.resolve(column.style());
                     let char_width = column.fonts_mut(|f| f.glyph_width(&font, '0'));
                     let label = truncate_label(label, column.available_width(), char_width);
@@ -916,7 +914,7 @@ mod tests {
 
     fn show_view(ui: &mut egui::Ui, view: &mut TextView) {
         view.process_input(ui);
-        view.show_header(ui);
+        view.show_header(ui, [Path::new("left"), Path::new("right")]);
         view.show_diff(ui);
     }
 
@@ -945,10 +943,7 @@ mod tests {
             .replace("line 5\n", "line five\n")
             .replace("line 15\n", "line fifteen\n")
             .replace("line 25\n", "line twenty-five\n");
-        TextView::new(
-            SideBySide::new([Buffer::new(&left), Buffer::new(&right)]),
-            ["left".into(), "right".into()],
-        )
+        TextView::new(SideBySide::new([Buffer::new(&left), Buffer::new(&right)]))
     }
 
     #[test]
@@ -986,7 +981,7 @@ mod tests {
     fn unchanged_file() -> TextView {
         let text: String = (0..200).map(|i| format!("line {i}\n")).collect();
         let diff = SideBySide::new([Buffer::new(&text), Buffer::new(&text)]);
-        TextView::new(diff, ["left".into(), "right".into()])
+        TextView::new(diff)
     }
 
     /// Presses `keys`, in [`typed_in_unchanged_file`]'s notation, one per
@@ -1231,7 +1226,7 @@ mod tests {
     )]
     fn the_cursor_starts(left: &str, right: &str, side: Option<usize>) {
         let buffers = [Buffer::new(left), Buffer::new(right)];
-        let view = TextView::new(SideBySide::new(buffers), ["left".into(), "right".into()]);
+        let view = TextView::new(SideBySide::new(buffers));
         assert_eq!(view.cursor_side, side);
     }
 
@@ -1473,7 +1468,7 @@ mod tests {
         Harness::new_ui_state(
             move |ui, view| {
                 view.process_input(ui);
-                view.show_header(ui);
+                view.show_header(ui, [&files[0].label, &files[1].label]);
                 crate::app::handle_save_request(
                     &files,
                     &mut save_message,
