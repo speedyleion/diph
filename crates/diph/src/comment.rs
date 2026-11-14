@@ -14,4 +14,5 @@ pub(crate) struct CommentRange {
 /// A comment being written.
 pub(crate) struct Draft {
     pub(crate) range: CommentRange,
+    pub(crate) text: String,
 }
