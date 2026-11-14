@@ -28,10 +28,6 @@ use crate::palette::{CHANGED_MARK, ONE_SIDED_MARK, Palette};
 use crate::selection::{Selection, SelectionKind};
 use crate::view_rows::{Gap, ViewRow, ViewRows};
 
-/// Rows of an empty comment box: a row for its text, and half a row above
-/// and below it.
-const EMPTY_COMMENT_ROWS: usize = 2;
-
 /// Width of the cursor in insert mode, a bar before its column.
 const CURSOR_BAR_WIDTH: f32 = 2.0;
 
@@ -60,7 +56,7 @@ struct ColorsChunk {
 enum Mode {
     Normal,
     Insert,
-    /// Writing a comment.
+    /// Writing a comment, whose box takes the typed text.
     Comment,
 }
 
@@ -69,6 +65,14 @@ pub(crate) enum ViewEvent {
     Save,
     Reload,
     Yank(String),
+}
+
+/// What the view did with an input event.
+enum Handled {
+    /// Took the event, with what it asks of the app, if anything.
+    Taken(Option<ViewEvent>),
+    /// Left the event to the widgets.
+    Left,
 }
 
 pub(crate) struct SaveTarget {
@@ -98,7 +102,7 @@ pub struct TextView {
     gaps: Vec<Gap>,
     mode: Mode,
     /// Whether the last key pressed was bound to an action, so the text it
-    /// typed is not inserted.
+    /// typed is taken and dropped.
     key_handled: bool,
     normal_keys: Keymap<Action>,
     insert_keys: Keymap<Action>,
@@ -259,10 +263,19 @@ impl TextView {
         }
     }
 
+    /// Handles this frame's input, leaving the widgets only the events the
+    /// view did not take, such as the text typed into a comment box.
     pub(crate) fn process_input(&mut self, ui: &mut egui::Ui) -> Vec<ViewEvent> {
         let events = ui.input(|i| i.events.clone());
         let mut view_events = Vec::new();
-        view_events.extend(events.iter().filter_map(|e| self.handle(ui.ctx(), e)));
+        let mut untaken = Vec::new();
+        for event in events {
+            match self.handle(ui.ctx(), &event) {
+                Handled::Taken(view_event) => view_events.extend(view_event),
+                Handled::Left => untaken.push(event),
+            }
+        }
+        ui.input_mut(|i| i.events = untaken);
         view_events
     }
 
@@ -337,8 +350,8 @@ impl TextView {
     }
 
     /// Performs the action of a pressed key, or in insert mode inserts typed
-    /// text that a bound key did not type.
-    fn handle(&mut self, ctx: &egui::Context, event: &egui::Event) -> Option<ViewEvent> {
+    /// text that a bound key did not type. Takes the text a bound key typed.
+    fn handle(&mut self, ctx: &egui::Context, event: &egui::Event) -> Handled {
         if let Some(key) = pressed_key(event) {
             let keymap = match self.mode {
                 Mode::Normal => &mut self.normal_keys,
@@ -348,15 +361,18 @@ impl TextView {
             let pressed = keymap.press(key);
             self.key_handled = pressed.is_some();
             if let Some((action, count)) = pressed {
-                return self.perform(ctx, action, count);
+                return Handled::Taken(self.perform(ctx, action, count));
             }
-        } else if let egui::Event::Text(text) = event
-            && self.mode == Mode::Insert
-            && !std::mem::take(&mut self.key_handled)
-        {
-            self.type_text(text);
+        } else if let egui::Event::Text(text) = event {
+            if std::mem::take(&mut self.key_handled) {
+                return Handled::Taken(None);
+            }
+            if self.mode == Mode::Insert {
+                self.type_text(text);
+                return Handled::Taken(None);
+            }
         }
-        None
+        Handled::Left
     }
 
     /// Performs `action`, with the count typed before its keys.
@@ -577,7 +593,10 @@ impl TextView {
             kind: selection.kind,
             range: selection.range(active),
         };
-        self.draft = Some(Draft { range });
+        self.draft = Some(Draft {
+            range,
+            text: String::new(),
+        });
         self.mode = Mode::Comment;
     }
 
@@ -713,12 +732,12 @@ impl TextView {
             after: self
                 .diff
                 .row_of(draft.range.side, draft.range.range.end.line),
-            rows: EMPTY_COMMENT_ROWS,
+            rows: layout.comment_rows(ui, &draft.text),
         });
         let gaps: Vec<_> = draft_gap.into_iter().collect();
         if gaps != self.gaps {
             self.gaps = gaps;
-            // Keeps the comment box in view as it opens.
+            // Keeps the comment box in view as it opens and grows.
             if let Some(gap) = draft_gap {
                 self.scroll_to_show(self.view_rows().view_row(gap.after) + gap.rows);
             }
@@ -735,7 +754,7 @@ impl TextView {
         let cursor = self.cursor_position();
         let selection = self.selection;
         let rows = self.diff.rows();
-        let draft = &self.draft;
+        let draft = &mut self.draft;
         let output = area.show_rows(ui, layout.row_height, view_rows.len(), |ui, range| {
             let first_in_view = range.start;
             // `last` paints every row, keeping the click if one was clicked.
@@ -750,9 +769,8 @@ impl TextView {
                         selection,
                     ),
                     ViewRow::Gap { gap, row } => {
-                        let side = draft.as_ref()?.range.side;
                         let paint_box = row == 0 || view_row == first_in_view;
-                        layout.paint_gap(ui, gap, row, side, paint_box);
+                        layout.paint_gap(ui, gap, row, draft.as_mut()?, paint_box);
                         None
                     }
                 })
@@ -988,14 +1006,30 @@ impl RowLayout {
         clicked
     }
 
-    /// Paints row `row` of `gap`, under a comment box on `side`, with filler
-    /// on the other side. When `paint_box`, also paints the box over the
+    /// Rows of a comment box holding `text`: its lines, wrapped to fit the
+    /// box, and half a row above and below them.
+    fn comment_rows(&self, ui: &egui::Ui, text: &str) -> usize {
+        let width = self.half_width - self.gutter_width - 3.0 * self.char_width;
+        let font = self.font.clone();
+        let galley = ui.fonts_mut(|f| f.layout(text.to_owned(), font, Color32::PLACEHOLDER, width));
+        galley.rows.len() + 1
+    }
+
+    /// Paints row `row` of `gap`, under `draft`'s last line, with filler on
+    /// the other side. When `paint_box`, also paints `draft`'s box over the
     /// whole gap.
-    fn paint_gap(&self, ui: &mut egui::Ui, gap: Gap, row: usize, side: usize, paint_box: bool) {
+    fn paint_gap(
+        &self,
+        ui: &mut egui::Ui,
+        gap: Gap,
+        row: usize,
+        draft: &mut Draft,
+        paint_box: bool,
+    ) {
         let size = vec2(ui.available_width(), self.row_height);
         let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
         let (left, right) = rect.split_left_right_at_x(rect.left() + self.half_width);
-        let (commented, other) = match side {
+        let (commented, other) = match draft.range.side {
             0 => (left, right),
             _ => (right, left),
         };
@@ -1008,8 +1042,28 @@ impl RowLayout {
             let bottom = top + gap.rows as f32 * self.row_height;
             let x = commented.left() + self.gutter_width..=commented.right() - self.char_width;
             let box_rect = Rect::from_x_y_ranges(x, top..=bottom);
-            let (fill, stroke) = (self.palette.filler, StrokeKind::Inside);
-            painter.rect(box_rect, 2.0, fill, divider, stroke);
+            self.paint_comment_box(ui, box_rect, &mut draft.text);
+        }
+    }
+
+    /// Paints a comment box over `rect`, holding a text box that edits
+    /// `text` and keeps the keyboard focus.
+    fn paint_comment_box(&self, ui: &mut egui::Ui, rect: Rect, text: &mut String) {
+        let divider = Stroke::new(1.0, self.palette.divider);
+        let (fill, stroke) = (self.palette.filler, StrokeKind::Inside);
+        ui.painter().rect(rect, 2.0, fill, divider, stroke);
+        let text_rect = rect.shrink2(vec2(self.char_width, self.row_height / 2.0));
+        let edit = egui::TextEdit::multiline(text)
+            .id_salt("comment")
+            .hint_text("Comment")
+            .font(self.font.clone())
+            .frame(egui::Frame::NONE)
+            .margin(0.0)
+            .desired_width(text_rect.width())
+            .desired_rows(1);
+        let response = ui.new_child(UiBuilder::new().max_rect(text_rect)).add(edit);
+        if !response.has_focus() {
+            response.request_focus();
         }
     }
 
@@ -2298,6 +2352,18 @@ mod tests {
         assert!(view.mode == Mode::Normal);
     }
 
+    #[test]
+    fn typing_in_comment_mode_writes_the_comment_and_leaves_the_text() {
+        let harness = typed_in_unchanged_file("c i x");
+
+        let view = harness.state();
+        let comment = view.draft.as_ref().map(|draft| draft.text.as_str());
+        assert_eq!(
+            (comment, view.diff.buffers()[1].lines()[0].as_str()),
+            (Some("ix"), "line 0")
+        );
+    }
+
     #[yare::parameterized(
         the_cursor_line_without_a_selection = {
             "j c", SelectionKind::Line, Position { line: 1, column: 0 }, Position { line: 1, column: 0 }
@@ -2330,10 +2396,13 @@ mod tests {
         assert_eq!((view.draft.is_none(), line), (true, Some(1)));
     }
 
-    #[test]
-    fn an_empty_comment_box_takes_two_rows_under_the_last_line() {
-        let harness = typed_in_unchanged_file("V j c");
+    #[yare::parameterized(
+        an_empty_box_takes_two_rows_under_the_last_line = { "V j c", Gap { after: 1, rows: 2 } },
+        each_line_of_the_comment_adds_a_row = { "c x Enter y", Gap { after: 0, rows: 3 } },
+    )]
+    fn the_comment_box_takes_a_gap(keys: &str, gap: Gap) {
+        let harness = typed_in_unchanged_file(keys);
 
-        assert_eq!(harness.state().gaps, vec![Gap { after: 1, rows: 2 }]);
+        assert_eq!(harness.state().gaps, vec![gap]);
     }
 }
