@@ -55,10 +55,11 @@ enum Mode {
     Insert,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ViewEvent {
     Save,
     Reload,
+    Yank(String),
 }
 
 pub(crate) struct SaveTarget {
@@ -381,6 +382,15 @@ impl TextView {
             Action::Close => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             Action::Save => return Some(ViewEvent::Save),
             Action::Reload => return Some(ViewEvent::Reload),
+            Action::Yank => {
+                let selection = self.selection.take()?;
+                let (side, active) = self.cursor_position()?;
+                if side != selection.side {
+                    return None;
+                }
+                let text = selected_text(&self.diff.buffers()[side], selection, active)?;
+                return Some(ViewEvent::Yank(text));
+            }
             Action::StartCharacterSelection => self.start_selection(SelectionKind::Character),
             Action::StartLineSelection => self.start_selection(SelectionKind::Line),
             Action::CancelSelection => self.selection = None,
@@ -1117,6 +1127,42 @@ fn selected_bytes(
         .nth(end_column)
         .map_or(text.len(), |(byte, _)| byte);
     Some(start..end)
+}
+
+fn selected_text(buffer: &Buffer, selection: Selection, active: Position) -> Option<String> {
+    let lines = buffer.lines();
+    let range = selection.range(active);
+    let start_line = lines.get(range.start.line)?;
+    let end_line = lines.get(range.end.line)?;
+    let text = buffer.text();
+    let line_ending = if text.contains("\r\n") { "\r\n" } else { "\n" };
+    let line_start = |index: usize| {
+        lines[..index]
+            .iter()
+            .map(|line| line.len() + line_ending.len())
+            .sum::<usize>()
+    };
+    let start_line_start = line_start(range.start.line);
+    let end_line_start = line_start(range.end.line);
+    let (start, end) = match selection.kind {
+        SelectionKind::Line => {
+            let end = end_line_start + end_line.len();
+            let end = end + usize::from(text[end..].starts_with(line_ending)) * line_ending.len();
+            (start_line_start, end)
+        }
+        SelectionKind::Character => {
+            let start_column = start_line.char_indices().nth(range.start.column);
+            let start = start_line_start + start_column.map_or(start_line.len(), |(byte, _)| byte);
+            let end_column = end_line.char_indices().nth(range.end.column);
+            let end = end_line_start + end_column.map_or(end_line.len(), |(byte, _)| byte);
+            let end = match end_line.get(end - end_line_start..)?.chars().next() {
+                Some(character) => end + character.len_utf8(),
+                None => end + usize::from(text[end..].starts_with(line_ending)) * line_ending.len(),
+            };
+            (start, end)
+        }
+    };
+    Some(text.get(start..end)?.to_owned())
 }
 
 /// The index of the glyph of `glyphs`, laid out from 0, that `x` is on, or
@@ -2053,5 +2099,93 @@ mod tests {
                 (7, Color32::TRANSPARENT),
             ]
         );
+    }
+
+    #[yare::parameterized(
+        inclusive_unicode_characters = {
+            "aébc\n",
+            SelectionKind::Character,
+            Position { line: 0, column: 1 },
+            Position { line: 0, column: 2 },
+            "éb",
+        },
+        reversed_multiline_crlf = {
+            "abc\r\ndef\r\n",
+            SelectionKind::Character,
+            Position { line: 1, column: 1 },
+            Position { line: 0, column: 1 },
+            "bc\r\nde",
+        },
+        empty_line_characterwise = {
+            "a\n\nb\n",
+            SelectionKind::Character,
+            Position { line: 1, column: 0 },
+            Position { line: 1, column: 0 },
+            "\n",
+        },
+        final_line_without_terminator = {
+            "one\ntwó",
+            SelectionKind::Character,
+            Position { line: 1, column: 0 },
+            Position { line: 1, column: 2 },
+            "twó",
+        },
+        linewise_includes_crlf_terminator = {
+            "one\r\ntwo\r\nthree",
+            SelectionKind::Line,
+            Position { line: 0, column: 0 },
+            Position { line: 1, column: 1 },
+            "one\r\ntwo\r\n",
+        },
+        linewise_final_line_without_terminator = {
+            "one\ntwo",
+            SelectionKind::Line,
+            Position { line: 1, column: 0 },
+            Position { line: 1, column: 0 },
+            "two",
+        },
+    )]
+    fn selected_text_respects_kind_and_buffer_endings(
+        text: &str,
+        kind: SelectionKind,
+        anchor: Position,
+        active: Position,
+        expected: &str,
+    ) {
+        let buffer = Buffer::new(text);
+        let selection = Selection::new(kind, 1, anchor);
+
+        assert_eq!(
+            selected_text(&buffer, selection, active).as_deref(),
+            Some(expected)
+        );
+    }
+
+    #[test]
+    fn yank_emits_selected_text_and_clears_the_selection() {
+        let mut view = TextView::new(SideBySide::new([Buffer::new("left"), Buffer::new("aébc")]));
+        view.cursor
+            .set(&view.diff.buffers()[1], Position { line: 0, column: 1 });
+        view.selection = Some(Selection::new(
+            SelectionKind::Character,
+            1,
+            Position { line: 0, column: 0 },
+        ));
+        let mut harness = Harness::new_ui_state(
+            |ui, (view, events)| {
+                events.extend(view.process_input(ui));
+                view.show_header(ui, [Path::new("left"), Path::new("right")]);
+                view.show_diff(ui);
+            },
+            (view, Vec::new()),
+        );
+        harness.run();
+        harness.key_press(Key::Y);
+        harness.run();
+
+        let (view, events) = harness.state();
+        assert_eq!(events, &[ViewEvent::Yank("aé".to_owned())]);
+        assert_eq!(view.selection, None);
+        assert!(!view.is_insert_mode());
     }
 }

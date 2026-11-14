@@ -124,18 +124,13 @@ impl eframe::App for App {
             );
         }
         for event in self.view.process_input(ui) {
-            match event {
-                ViewEvent::Save => {
-                    handle_save_target(
-                        &self.files,
-                        &mut self.save_message,
-                        self.view.save_target(),
-                    );
-                }
-                ViewEvent::Reload => {
-                    handle_reload(&mut self.files, &mut self.view, &mut self.save_message);
-                }
-            }
+            handle_view_event(
+                event,
+                &ctx,
+                &mut self.files,
+                &mut self.view,
+                &mut self.save_message,
+            );
         }
         let started = self.started;
         let startup_time = *self.startup_time.get_or_insert_with(|| started.elapsed());
@@ -160,6 +155,20 @@ impl eframe::App for App {
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         save_theme(storage, self.theme);
+    }
+}
+
+fn handle_view_event(
+    event: ViewEvent,
+    ctx: &egui::Context,
+    files: &mut [SideFile; 2],
+    view: &mut TextView,
+    save_message: &mut Option<String>,
+) {
+    match event {
+        ViewEvent::Save => handle_save_target(files, save_message, view.save_target()),
+        ViewEvent::Reload => handle_reload(files, view, save_message),
+        ViewEvent::Yank(text) => ctx.copy_text(text),
     }
 }
 
@@ -255,11 +264,11 @@ mod tests {
 
     use crate::menu::MenuAction;
     use crate::palette::Palette;
-    use crate::text_view::{SaveTarget, TextView};
+    use crate::text_view::{SaveTarget, TextView, ViewEvent};
 
     use super::{
         SideFile, can_save as is_saveable, handle_menu_action, handle_reload, handle_save_target,
-        is_binary as contains_nul, show_status,
+        handle_view_event, is_binary as contains_nul, show_status,
     };
 
     fn test_view() -> TextView {
@@ -373,6 +382,27 @@ mod tests {
 
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "edited right\n");
         assert_eq!(save_message, Some(format!("saved {}", file.display())));
+    }
+
+    #[test]
+    fn yank_event_copies_text_to_the_egui_clipboard() {
+        let ctx = egui::Context::default();
+        let mut files = test_files(None);
+        let mut view = test_view();
+        let mut save_message = None;
+
+        handle_view_event(
+            ViewEvent::Yank("copied text".to_owned()),
+            &ctx,
+            &mut files,
+            &mut view,
+            &mut save_message,
+        );
+
+        assert_eq!(
+            ctx.output(|output| output.commands.clone()),
+            [egui::OutputCommand::CopyText("copied text".to_owned())]
+        );
     }
 
     #[test]
