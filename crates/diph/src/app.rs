@@ -192,7 +192,7 @@ fn save_review(
         return;
     };
     let paths = [files[0].label.as_path(), files[1].label.as_path()];
-    if let Err(error) = review::save(review, view.review_comments(paths)) {
+    if let Err(error) = review::save(review, paths, view.review_comments(paths)) {
         *save_message = Some(format!("couldn't save the review: {error:#}"));
     }
 }
