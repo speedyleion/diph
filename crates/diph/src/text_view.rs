@@ -470,6 +470,8 @@ impl TextView {
             Action::StartLineSelection => self.start_selection(SelectionKind::Line),
             Action::CancelSelection => self.selection = None,
             Action::Comment => self.start_comment(),
+            Action::NextComment => self.step_comment(count),
+            Action::PrevComment => self.step_comment(-count),
             Action::SaveComment => return self.save_comment(),
             Action::DiscardComment => {
                 self.draft = None;
@@ -700,6 +702,40 @@ impl TextView {
             range,
             text: String::new(),
         });
+    }
+
+    /// Moves the cursor to the first line of the `delta`th comment below its
+    /// row, or above it when `delta` is negative. Stays put when there are
+    /// not that many.
+    fn step_comment(&mut self, delta: isize) {
+        let Some((side, position)) = self.cursor_position() else {
+            return;
+        };
+        let cursor_row = self.diff.row_of(side, position.line);
+        let start_row = |range: &CommentRange| self.diff.row_of(range.side, range.range.start.line);
+        let mut ranges: Vec<_> = self.comments.iter().map(|comment| comment.range).collect();
+        ranges.retain(|range| self.has_line(*range));
+        ranges.sort_by_key(start_row);
+        let steps = delta.unsigned_abs() - 1;
+        let target = match delta > 0 {
+            true => ranges
+                .iter()
+                .filter(|r| start_row(r) > cursor_row)
+                .nth(steps),
+            false => ranges
+                .iter()
+                .rev()
+                .filter(|r| start_row(r) < cursor_row)
+                .nth(steps),
+        };
+        let Some(&CommentRange { side, range, .. }) = target else {
+            return;
+        };
+        if self.cursor_side != Some(side) {
+            self.selection = None;
+        }
+        self.cursor_side = Some(side);
+        self.move_cursor(|c, b| c.go_to_line(b, range.start.line));
     }
 
     /// Saves the draft and leaves comment mode, replacing the comment it
@@ -2633,5 +2669,39 @@ mod tests {
         harness.run();
 
         assert_eq!(harness.state().gaps, vec![]);
+    }
+
+    /// A line comment on `line` of `side`.
+    fn line_comment(side: usize, line: usize) -> Comment {
+        let position = Position { line, column: 0 };
+        let range = SelectionRange {
+            start: position,
+            end: position,
+        };
+        let kind = SelectionKind::Line;
+        Comment {
+            range: CommentRange { side, kind, range },
+            text: format!("on line {line}"),
+        }
+    }
+
+    #[yare::parameterized(
+        next_goes_to_the_first_comment_below = { "] c", 1, 2 },
+        next_crosses_to_the_other_side = { "] c ] c", 0, 5 },
+        next_takes_a_count = { "2 ] c", 0, 5 },
+        next_stays_put_after_the_last = { "] c ] c ] c ] c", 1, 9 },
+        prev_goes_to_the_first_comment_above = { "G [ c", 1, 9 },
+        prev_stays_put_before_the_first = { "] c [ c", 1, 2 },
+    )]
+    fn bracket_c_steps_between_comments(keys: &str, side: usize, line: usize) {
+        let comments = vec![line_comment(1, 9), line_comment(1, 2), line_comment(0, 5)];
+        let view = TextView::new(unchanged_file().diff, comments);
+        let mut harness = Harness::new_ui_state(show_view, view);
+        harness.run();
+
+        press(&mut harness, keys);
+
+        let cursor = harness.state().cursor_position();
+        assert_eq!(cursor, Some((side, Position { line, column: 0 })));
     }
 }
