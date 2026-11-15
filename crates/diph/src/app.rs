@@ -175,7 +175,11 @@ fn handle_view_event(
     save_message: &mut Option<String>,
 ) {
     match event {
-        ViewEvent::Save => handle_save_target(files, save_message, view.save_target()),
+        ViewEvent::Save => {
+            handle_save_target(files, save_message, view.save_target());
+            // The comments' lines may have moved with edits to the saved text.
+            save_review(files, view, review, save_message);
+        }
         ViewEvent::Reload => handle_reload(files, view, save_message),
         ViewEvent::Yank(text) => ctx.copy_text(text),
         ViewEvent::CommentsChanged => save_review(files, view, review, save_message),

@@ -503,6 +503,9 @@ impl TextView {
     fn edit(&mut self, side: usize, edit: impl FnOnce(&mut Buffer) -> Edit) -> Edit {
         let edit = self.diff.edit(side, edit);
         self.colors[side].apply(&edit);
+        for comment in &mut self.comments {
+            comment.range.apply(side, &edit);
+        }
         self.rehighlight(side);
         edit
     }
@@ -2755,5 +2758,19 @@ mod tests {
         let marks = comment_marks([50].into_iter(), map, map_y(map, 200, 20.0));
 
         assert_eq!(marks, vec![Rect::from_x_y_ranges(0.0..=10.0, 25.0..=28.0)]);
+    }
+
+    #[test]
+    fn a_comment_moves_with_lines_typed_above_it() {
+        let harness = typed_in_unchanged_file("j c x C-Enter k O Escape");
+
+        let lines: Vec<_> = harness
+            .state()
+            .comments
+            .iter()
+            .map(|c| c.range.range.start.line)
+            .collect();
+
+        assert_eq!(lines, vec![2]);
     }
 }
