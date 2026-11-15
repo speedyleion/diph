@@ -124,6 +124,9 @@ pub struct TextView {
     comments: Vec<Comment>,
     /// The comment being written in comment mode.
     draft: Option<Comment>,
+    /// The index of the saved comment the draft edits, which shows the
+    /// draft's box instead of its own while it does.
+    editing: Option<usize>,
     /// The gaps under comment boxes in the last frame.
     gaps: Vec<Gap>,
     mode: Mode,
@@ -166,6 +169,7 @@ impl TextView {
             selection: None,
             comments,
             draft: None,
+            editing: None,
             gaps: Vec::new(),
             diff,
             current_change: None,
@@ -228,6 +232,7 @@ impl TextView {
         self.mode = Mode::Normal;
         self.selection = None;
         self.draft = None;
+        self.editing = None;
         self.key_handled = false;
         self.normal_keys.clear();
         self.insert_keys.clear();
@@ -465,15 +470,10 @@ impl TextView {
             Action::StartLineSelection => self.start_selection(SelectionKind::Line),
             Action::CancelSelection => self.selection = None,
             Action::Comment => self.start_comment(),
-            Action::SaveComment => {
-                let draft = self.draft.take().filter(|draft| !draft.text.is_empty());
-                self.mode = Mode::Normal;
-                let saved = draft.is_some();
-                self.comments.extend(draft);
-                return saved.then_some(ViewEvent::CommentsChanged);
-            }
+            Action::SaveComment => return self.save_comment(),
             Action::DiscardComment => {
                 self.draft = None;
+                self.editing = None;
                 self.mode = Mode::Normal;
             }
             Action::Insert(at) => self.insert(at),
@@ -627,6 +627,7 @@ impl TextView {
         // Comments past the end of their side's text, such as after a reload
         // of shorter text, have no line to go under.
         let saved = saved.filter(|(comment, _)| self.has_line(comment.range));
+        let saved = saved.filter(|(_, shows)| self.editing.map(Shows::Saved) != Some(*shows));
         let draft = self.draft.iter().map(|draft| (draft, Shows::Draft));
         let mut boxes: Vec<_> = saved
             .chain(draft)
@@ -670,11 +671,24 @@ impl TextView {
     }
 
     /// Opens a comment box on the selection, or on the cursor's line without
-    /// one, and switches to comment mode.
+    /// one, and switches to comment mode. Without a selection, a comment
+    /// already on the cursor's line opens to edit instead.
     fn start_comment(&mut self) {
         let Some((side, active)) = self.cursor_position() else {
             return;
         };
+        self.mode = Mode::Comment;
+        self.editing = match self.selection {
+            Some(_) => None,
+            None => self
+                .comments
+                .iter()
+                .position(|comment: &Comment| comment.range.is_on(side, active.line)),
+        };
+        if let Some(index) = self.editing {
+            self.draft = Some(self.comments[index].clone());
+            return;
+        }
         let selection = self.selection.take();
         let selection = selection.unwrap_or(Selection::new(SelectionKind::Line, side, active));
         let range = CommentRange {
@@ -686,7 +700,20 @@ impl TextView {
             range,
             text: String::new(),
         });
-        self.mode = Mode::Comment;
+    }
+
+    /// Saves the draft and leaves comment mode, replacing the comment it
+    /// edits. An empty draft deletes the comment it edits, and is not saved.
+    fn save_comment(&mut self) -> Option<ViewEvent> {
+        self.mode = Mode::Normal;
+        let draft = self.draft.take()?;
+        match (self.editing.take(), draft.text.is_empty()) {
+            (Some(index), true) => _ = self.comments.remove(index),
+            (Some(index), false) => self.comments[index] = draft,
+            (None, false) => self.comments.push(draft),
+            (None, true) => return None,
+        }
+        Some(ViewEvent::CommentsChanged)
     }
 
     /// Moves the cursor to the line of `side` across from it, keeping its
@@ -2511,6 +2538,10 @@ mod tests {
         ctrl_enter_saves_the_comment = { "c x C-Enter", vec!["x"] },
         an_empty_comment_is_not_saved = { "c C-Enter", vec![] },
         escape_does_not_save_the_comment = { "c x Escape", vec![] },
+        c_on_a_commented_line_edits_its_comment = { "c x C-Enter c y C-Enter", vec!["xy"] },
+        emptying_a_comment_deletes_it = { "c x C-Enter c Backspace C-Enter", vec![] },
+        escape_leaves_an_edited_comment_as_it_was = { "c x C-Enter c y Escape", vec!["x"] },
+        c_with_a_selection_adds_a_comment = { "c x C-Enter V c y C-Enter", vec!["x", "y"] },
     )]
     fn saved_comments(keys: &str, texts: Vec<&str>) {
         let harness = typed_in_unchanged_file(keys);
@@ -2527,8 +2558,11 @@ mod tests {
         boxes_follow_the_order_of_their_lines = {
             "j c x C-Enter k c", vec![Gap { after: 0, rows: 2 }, Gap { after: 1, rows: 2 }]
         },
+        an_edited_comment_shows_only_the_draft_box = {
+            "c x C-Enter c", vec![Gap { after: 0, rows: 2 }]
+        },
         boxes_under_one_line_follow_each_other = {
-            "c x Enter y C-Enter c", vec![Gap { after: 0, rows: 3 }, Gap { after: 0, rows: 2 }]
+            "c x Enter y C-Enter V c", vec![Gap { after: 0, rows: 3 }, Gap { after: 0, rows: 2 }]
         },
     )]
     fn comment_boxes(keys: &str, gaps: Vec<Gap>) {
@@ -2540,6 +2574,10 @@ mod tests {
     #[yare::parameterized(
         saving_a_comment = { "c x C-Enter", vec![ViewEvent::CommentsChanged] },
         not_saving_an_empty_comment = { "c C-Enter", vec![] },
+        deleting_a_comment = {
+            "c x C-Enter c Backspace C-Enter",
+            vec![ViewEvent::CommentsChanged, ViewEvent::CommentsChanged]
+        },
     )]
     fn comments_changed_event(keys: &str, expected: Vec<ViewEvent>) {
         let mut harness = Harness::new_ui_state(
