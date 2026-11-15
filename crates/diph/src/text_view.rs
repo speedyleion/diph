@@ -24,13 +24,16 @@ use crate::cursor::Cursor;
 use crate::keymap::{
     Action, InsertAt, Keymap, OpenLineAt, comment_keymap, insert_keymap, normal_keymap, pressed_key,
 };
-use crate::palette::{CHANGED_MARK, ONE_SIDED_MARK, Palette};
+use crate::palette::{CHANGED_MARK, COMMENT_MARK, ONE_SIDED_MARK, Palette};
 use crate::review::ReviewComment;
 use crate::selection::{Selection, SelectionKind, SelectionRange};
 use crate::view_rows::{Gap, ViewRow, ViewRows};
 
 /// Width of the cursor in insert mode, a bar before its column.
 const CURSOR_BAR_WIDTH: f32 = 2.0;
+
+/// Width of the gutter mark of a commented line.
+const COMMENT_MARK_WIDTH: f32 = 3.0;
 
 /// Width of the change map beside the rows.
 const MAP_WIDTH: f32 = 16.0;
@@ -376,6 +379,12 @@ impl TextView {
         painter.rect_filled(map, 0.0, self.palette.filler);
         for (mark, color) in change_marks(self.diff.rows(), map, diff_row_y) {
             painter.rect_filled(mark, 0.0, color);
+        }
+        let comments = self.comments.iter().filter(|c| self.has_line(c.range));
+        let comment_rows =
+            comments.map(|c| self.diff.row_of(c.range.side, c.range.range.start.line));
+        for mark in comment_marks(comment_rows, map, diff_row_y) {
+            painter.rect_filled(mark, 0.0, COMMENT_MARK);
         }
         let cover = Rect::from_x_y_ranges(map.x_range(), y(in_view.start)..=y(in_view.end));
         painter.rect_filled(cover, 0.0, self.palette.in_view_cover);
@@ -899,24 +908,22 @@ impl TextView {
             let offset = row as f32 * row_height;
             area = area.vertical_scroll_offset(offset.min(max_offset).max(0.0));
         }
-        let cursor = self.cursor_position();
-        let selection = self.selection;
         let rows = self.diff.rows();
         let comments = &self.comments;
+        let marks = Marks {
+            cursor: self.cursor_position(),
+            selection: self.selection,
+            comments,
+        };
         let draft = &mut self.draft;
         let output = area.show_rows(ui, layout.row_height, view_rows.len(), |ui, range| {
             let first_in_view = range.start;
             // `last` paints every row, keeping the click if one was clicked.
             range
                 .filter_map(|view_row| match view_rows.at(view_row) {
-                    ViewRow::Diff(row) => layout.paint_row(
-                        ui,
-                        self.diff.buffers(),
-                        &self.colors,
-                        &rows[row],
-                        cursor,
-                        selection,
-                    ),
+                    ViewRow::Diff(row) => {
+                        layout.paint_row(ui, self.diff.buffers(), &self.colors, &rows[row], marks)
+                    }
                     ViewRow::Gap { index, row } => {
                         let paint_box = row == 0 || view_row == first_in_view;
                         let text = match boxes[index].shows {
@@ -1062,6 +1069,20 @@ fn column_marks(
     marks
 }
 
+/// A mark across `map` from the `y` of each of `rows`, the rows of the
+/// diff comments start on, [`MIN_MARK_HEIGHT`] tall.
+fn comment_marks(
+    rows: impl Iterator<Item = usize>,
+    map: Rect,
+    y: impl Fn(f32) -> f32,
+) -> Vec<Rect> {
+    let mark = |row: usize| {
+        let top = y(row as f32);
+        Rect::from_x_y_ranges(map.x_range(), top..=top + MIN_MARK_HEIGHT)
+    };
+    rows.map(mark).collect()
+}
+
 /// The change map color of a row of `kind` in the column whose side's
 /// one-sided rows are `one_sided`, if the column marks it.
 fn mark_color(kind: RowKind, one_sided: RowKind) -> Option<Color32> {
@@ -1092,22 +1113,37 @@ struct HalfLine<'a> {
     background: Option<Color32>,
     selection: Option<Selection>,
     active: Option<Position>,
+    /// Whether a comment is on the line.
+    commented: bool,
+}
+
+/// What a row shows on its lines besides their text.
+#[derive(Clone, Copy)]
+struct Marks<'a> {
+    /// The side and position of the cursor.
+    cursor: Option<(usize, Position)>,
+    selection: Option<Selection>,
+    comments: &'a [Comment],
 }
 
 impl RowLayout {
     /// Paints `row` across both halves, with each side's text from its
-    /// buffer, a divider between them, and the cursor if it is on one of the
-    /// row's lines, given as its side and position. Returns the side and
-    /// position of the character a click on a line's half was on.
+    /// buffer, a divider between them, and the `marks` on the row's lines.
+    /// Returns the side and position of the character a click on a line's
+    /// half was on.
     fn paint_row(
         &self,
         ui: &mut egui::Ui,
         buffers: &[Buffer; 2],
         colors: &[SideColors; 2],
         row: &Row,
-        cursor: Option<(usize, Position)>,
-        selection: Option<Selection>,
+        marks: Marks<'_>,
     ) -> Option<(usize, Position)> {
+        let Marks {
+            cursor,
+            selection,
+            comments,
+        } = marks;
         let size = vec2(ui.available_width(), self.row_height);
         let (rect, response) = ui.allocate_exact_size(size, Sense::CLICK);
         let response = response.on_hover_cursor(CursorIcon::Text);
@@ -1142,6 +1178,7 @@ impl RowLayout {
                     background,
                     selection,
                     active,
+                    commented: comments.iter().any(|c| c.range.is_on(side, line.index)),
                 },
             );
             let glyphs = galley.rows.first().map_or(&[][..], |r| &r.glyphs);
@@ -1270,6 +1307,7 @@ impl RowLayout {
             background,
             selection,
             active,
+            commented,
         } = half;
         let painter = ui.painter();
         let mid_y = half.center().y;
@@ -1288,6 +1326,11 @@ impl RowLayout {
                 0.0,
                 self.selection_background(background.unwrap_or(self.palette.background)),
             );
+        }
+        if commented {
+            let x = half.left()..=half.left() + COMMENT_MARK_WIDTH;
+            let mark = Rect::from_x_y_ranges(x, half.y_range()).shrink2(vec2(0.0, 2.0));
+            painter.rect_filled(mark, 1.0, COMMENT_MARK);
         }
         let number = (line.index + 1).to_string();
         let pos = pos2(gutter_right - self.char_width, mid_y);
@@ -2703,5 +2746,14 @@ mod tests {
 
         let cursor = harness.state().cursor_position();
         assert_eq!(cursor, Some((side, Position { line, column: 0 })));
+    }
+
+    #[test]
+    fn a_comment_marks_the_change_map_at_its_share_of_the_map() {
+        let map = Rect::from_min_size(pos2(0.0, 0.0), vec2(10.0, 100.0));
+
+        let marks = comment_marks([50].into_iter(), map, map_y(map, 200, 20.0));
+
+        assert_eq!(marks, vec![Rect::from_x_y_ranges(0.0..=10.0, 25.0..=28.0)]);
     }
 }
