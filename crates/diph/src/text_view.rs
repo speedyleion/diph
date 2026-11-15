@@ -748,6 +748,18 @@ impl TextView {
         }
         self.cursor_side = Some(side);
         self.move_cursor(|c, b| c.go_to_line(b, range.start.line));
+        let view_rows = self.view_rows();
+        let start_row = view_rows.view_row(self.diff.row_of(side, range.start.line));
+        let end_row = view_rows
+            .view_row(self.diff.row_of(side, range.end.line) + 1)
+            .saturating_sub(1);
+        let rows_in_view = self.rows_in_view.max(1);
+        self.scroll_to_top_row = Some(
+            self.scroll_to_top_row
+                .unwrap_or(self.top_row)
+                .max(end_row.saturating_sub(rows_in_view.saturating_sub(1)))
+                .min(start_row),
+        );
     }
 
     /// Saves the draft and leaves comment mode, replacing the comment it
@@ -2749,6 +2761,66 @@ mod tests {
 
         let cursor = harness.state().cursor_position();
         assert_eq!(cursor, Some((side, Position { line, column: 0 })));
+    }
+
+    #[yare::parameterized(
+        a_fitting_comment_keeps_its_last_line_in_view = { 90, 95, true },
+        a_tall_comment_keeps_its_first_line_in_view = { 20, 80, false },
+    )]
+    fn bracket_c_keeps_comment_lines_in_view(
+        start_line: usize,
+        end_line: usize,
+        last_line_in_view: bool,
+    ) {
+        let range = SelectionRange {
+            start: Position {
+                line: start_line,
+                column: 0,
+            },
+            end: Position {
+                line: end_line,
+                column: 0,
+            },
+        };
+        let comment = Comment {
+            range: CommentRange {
+                side: 1,
+                kind: SelectionKind::Line,
+                range,
+            },
+            text: String::new(),
+        };
+        let view = TextView::new(unchanged_file().diff, vec![comment]);
+        let mut harness = Harness::new_ui_state(show_view, view);
+        harness.run();
+
+        press(&mut harness, "] c");
+
+        let view = harness.state();
+        let start_row = view.view_row_of(1, start_line);
+        let end_row = view.view_row_of(1, end_line);
+        let bottom_row = view.top_row + view.rows_in_view;
+        assert!(start_row >= view.top_row);
+        assert_eq!(end_row < bottom_row, last_line_in_view);
+    }
+
+    #[test]
+    fn bracket_c_keeps_the_first_comment_box_in_view_from_the_top() {
+        let comment_line = 90;
+        let comments = vec![line_comment(1, comment_line), line_comment(1, 160)];
+        let view = TextView::new(unchanged_file().diff, comments);
+        let mut harness = Harness::new_ui_state(show_view, view);
+        harness.run();
+
+        press(&mut harness, "] c");
+
+        let view = harness.state();
+        let comment_row = view.view_row_of(1, comment_line);
+        let comment_end = view
+            .view_rows()
+            .view_row(view.diff.row_of(1, comment_line) + 1);
+        assert!(comment_row >= view.top_row);
+        assert!(comment_end <= view.top_row + view.rows_in_view);
     }
 
     #[test]
