@@ -678,10 +678,9 @@ impl TextView {
             return;
         };
         self.mode = Mode::Comment;
-        let on_cursor_line = |comment: &Comment| comment.range.is_on(side, active.line);
         self.editing = match self.selection {
             Some(_) => None,
-            None => self.comments.iter().position(on_cursor_line),
+            None => self.comments.iter().position(|comment: &Comment| comment.range.is_on(side, active.line)),
         };
         if let Some(index) = self.editing {
             self.draft = Some(self.comments[index].clone());
