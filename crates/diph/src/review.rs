@@ -1,4 +1,4 @@
-//! The review file: the comments on several diffs, as JSON.
+//! The file to hold review comments
 
 use std::path::{Path, PathBuf};
 
@@ -67,9 +67,10 @@ impl ReviewComment {
     }
 }
 
-/// Replaces the comments on `paths` in the review file `file` with
-/// `comments`, keeping the comments on other paths. Creates the file when
-/// it does not exist.
+/// Writes `comments` to the review `file`
+/// Comments for `paths` will replace any comments for paths that exist in `file`, if `file`
+/// already contains comments.
+/// Comments for other files will remain unmodified.
 pub(crate) fn save(
     file: &Path,
     paths: [&Path; 2],
@@ -155,7 +156,7 @@ mod tests {
     }
 
     #[test]
-    fn saving_replaces_the_comments_on_the_diffs_paths_and_keeps_the_rest() {
+    fn saving_replaces_the_comments_for_the_diff_and_keeps_the_rest() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("review.json");
         let kept = vec![review_comment("other.rs", "kept")];
@@ -182,9 +183,7 @@ mod tests {
             .iter()
             .map(|comment| comment["body"].as_str().unwrap())
             .collect();
-        assert_eq!(
-            (saved["version"].as_u64(), bodies),
-            (Some(1), vec!["kept", "new"])
-        );
+        assert_eq!(saved["version"].as_u64(), Some(1));
+        assert_eq!(bodies, vec!["kept", "new"]);
     }
 }

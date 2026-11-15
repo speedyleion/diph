@@ -38,8 +38,7 @@ struct Args {
     /// also picks the side's syntax highlighting.
     #[arg(long)]
     label: Vec<PathBuf>,
-    /// The JSON file to save review comments in. Comments on other paths
-    /// in it are kept, so one file can hold a review of several files.
+    /// The JSON file to save review comments in.
     #[arg(long)]
     review: Option<PathBuf>,
 }

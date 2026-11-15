@@ -15,8 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Ability to copy highlighted text with y
 - Review comments: c opens a comment box under the selection, or under
   the cursor's line, and Ctrl+Enter (Cmd+Enter on macOS) saves it there
-- `--review <file>` saves review comments in a JSON file shared by every
-  file of a review
+- `--review <file>` saves review comments in a JSON file
 
 ## [0.1.4] - 2026-11-09
 
