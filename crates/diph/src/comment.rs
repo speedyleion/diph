@@ -71,19 +71,15 @@ mod tests {
         }
     }
 
-    fn at(line: usize, byte: usize) -> BytePosition {
-        BytePosition { line, byte }
-    }
-
     #[yare::parameterized(
-        a_new_line_above_moves_them_down = { 1, at(1, 2), at(1, 2), at(2, 0), [4, 6] },
-        a_line_opened_above_their_first_moves_them_down = { 1, at(3, 0), at(3, 0), at(4, 0), [4, 6] },
-        a_new_line_within_their_first_moves_only_the_rest = { 1, at(3, 2), at(3, 2), at(4, 0), [3, 6] },
-        joining_their_first_to_the_line_above_moves_them_up = { 1, at(2, 4), at(3, 0), at(2, 4), [2, 4] },
-        deleting_lines_through_their_first_moves_it_to_the_start = { 1, at(1, 0), at(4, 1), at(1, 0), [1, 2] },
-        typing_within_a_line_keeps_them = { 1, at(4, 1), at(4, 1), at(4, 2), [3, 5] },
-        an_edit_after_them_keeps_them = { 1, at(7, 0), at(7, 0), at(9, 0), [3, 5] },
-        an_edit_on_the_other_side_keeps_them = { 0, at(1, 0), at(1, 0), at(2, 0), [3, 5] },
+        a_new_line_above_moves_them_down = { 1, BytePosition { line: 1, byte: 2 }, BytePosition { line: 1, byte: 2 }, BytePosition { line: 2, byte: 0 }, [4, 6] },
+        a_line_opened_above_their_first_moves_them_down = { 1, BytePosition { line: 3, byte: 0 }, BytePosition { line: 3, byte: 0 }, BytePosition { line: 4, byte: 0 }, [4, 6] },
+        a_new_line_within_their_first_moves_only_the_rest = { 1, BytePosition { line: 3, byte: 2 }, BytePosition { line: 3, byte: 2 }, BytePosition { line: 4, byte: 0 }, [3, 6] },
+        joining_their_first_to_the_line_above_moves_them_up = { 1, BytePosition { line: 2, byte: 4 }, BytePosition { line: 3, byte: 0 }, BytePosition { line: 2, byte: 4 }, [2, 4] },
+        deleting_lines_through_their_first_moves_it_to_the_start = { 1, BytePosition { line: 1, byte: 0 }, BytePosition { line: 4, byte: 1 }, BytePosition { line: 1, byte: 0 }, [1, 2] },
+        typing_within_a_line_keeps_them = { 1, BytePosition { line: 4, byte: 1 }, BytePosition { line: 4, byte: 1 }, BytePosition { line: 4, byte: 2 }, [3, 5] },
+        an_edit_after_them_keeps_them = { 1, BytePosition { line: 7, byte: 0 }, BytePosition { line: 7, byte: 0 }, BytePosition { line: 9, byte: 0 }, [3, 5] },
+        an_edit_on_the_other_side_keeps_them = { 0, BytePosition { line: 1, byte: 0 }, BytePosition { line: 1, byte: 0 }, BytePosition { line: 2, byte: 0 }, [3, 5] },
     )]
     fn apply(
         side: usize,

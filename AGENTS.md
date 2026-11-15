@@ -69,6 +69,8 @@ crate descriptions, and `--help` text: describe what the code does now.
   function, passing in what it needs from the enclosing scope.
 - Don't wrap an expression in parentheses that only change where
   rustfmt breaks the line, such as `(rows.iter().enumerate())`.
+- Prefer struct literals over one-line functions that only pass arguments
+  through to struct fields.
 - Keep simple, single-use filtering, mapping, and argument forwarding at
   the call site. Extract a helper when the logic is reused, has multiple
   meaningful steps, or its name clarifies a domain rule that isn't already

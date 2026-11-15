@@ -499,8 +499,7 @@ impl TextView {
 
     /// Edits the buffer of `side` with `edit` and starts highlighting the
     /// side again. Until the colors arrive, the side's colors move with the
-    /// text the edit changed, as do the comments. Returns the change `edit`
-    /// made.
+    /// text the edit changed. Returns the change `edit` made.
     fn edit(&mut self, side: usize, edit: impl FnOnce(&mut Buffer) -> Edit) -> Edit {
         let edit = self.diff.edit(side, edit);
         self.colors[side].apply(&edit);
