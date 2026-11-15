@@ -155,7 +155,7 @@ pub struct TextView {
 
 impl TextView {
     /// A view of `diff`.
-    pub fn new(diff: SideBySide) -> Self {
+    pub fn new(diff: SideBySide, comments: Vec<Comment>) -> Self {
         let buffers = diff.buffers();
         // The right side, unless only the left has lines.
         let cursor_side = [1, 0].into_iter().find(|&s| !buffers[s].lines().is_empty());
@@ -164,7 +164,7 @@ impl TextView {
             cursor_side,
             cursor: Cursor::default(),
             selection: None,
-            comments: Vec::new(),
+            comments,
             draft: None,
             gaps: Vec::new(),
             diff,
@@ -624,6 +624,9 @@ impl TextView {
     fn comment_boxes(&self, ui: &egui::Ui, layout: &RowLayout) -> Vec<CommentBox> {
         let saved = self.comments.iter().enumerate();
         let saved = saved.map(|(index, comment)| (comment, Shows::Saved(index)));
+        // Comments past the end of their side's text, such as after a reload
+        // of shorter text, have no line to go under.
+        let saved = saved.filter(|(comment, _)| self.has_line(comment.range));
         let draft = self.draft.iter().map(|draft| (draft, Shows::Draft));
         let mut boxes: Vec<_> = saved
             .chain(draft)
@@ -631,6 +634,11 @@ impl TextView {
             .collect();
         boxes.sort_by_key(|comment_box| comment_box.gap.after);
         boxes
+    }
+
+    /// Whether `range`'s last line is in its side's text.
+    fn has_line(&self, range: CommentRange) -> bool {
+        range.range.end.line < self.diff.buffers()[range.side].lines().len()
     }
 
     /// The box of `comment`, under its last line.
@@ -1458,7 +1466,10 @@ mod tests {
             .replace("line 5\n", "line five\n")
             .replace("line 15\n", "line fifteen\n")
             .replace("line 25\n", "line twenty-five\n");
-        TextView::new(SideBySide::new([Buffer::new(&left), Buffer::new(&right)]))
+        TextView::new(
+            SideBySide::new([Buffer::new(&left), Buffer::new(&right)]),
+            Vec::new(),
+        )
     }
 
     #[test]
@@ -1496,7 +1507,7 @@ mod tests {
     fn unchanged_file() -> TextView {
         let text: String = (0..200).map(|i| format!("line {i}\n")).collect();
         let diff = SideBySide::new([Buffer::new(&text), Buffer::new(&text)]);
-        TextView::new(diff)
+        TextView::new(diff, Vec::new())
     }
 
     /// Presses `keys`, in [`typed_in_unchanged_file`]'s notation, one per
@@ -1741,7 +1752,7 @@ mod tests {
     )]
     fn the_cursor_starts(left: &str, right: &str, side: Option<usize>) {
         let buffers = [Buffer::new(left), Buffer::new(right)];
-        let view = TextView::new(SideBySide::new(buffers));
+        let view = TextView::new(SideBySide::new(buffers), Vec::new());
         assert_eq!(view.cursor_side, side);
     }
 
@@ -2413,7 +2424,10 @@ mod tests {
 
     #[test]
     fn yank_emits_selected_text_and_clears_the_selection() {
-        let mut view = TextView::new(SideBySide::new([Buffer::new("left"), Buffer::new("aébc")]));
+        let mut view = TextView::new(
+            SideBySide::new([Buffer::new("left"), Buffer::new("aébc")]),
+            Vec::new(),
+        );
         view.cursor
             .set(&view.diff.buffers()[1], Position { line: 0, column: 1 });
         view.selection = Some(Selection::new(
@@ -2558,5 +2572,28 @@ mod tests {
             "body": "x",
         }]);
         assert_eq!(json, expected);
+    }
+
+    #[test]
+    fn a_comment_past_the_end_of_its_side_has_no_box() {
+        let position = Position { line: 5, column: 0 };
+        let range = CommentRange {
+            side: 1,
+            kind: SelectionKind::Line,
+            range: SelectionRange {
+                start: position,
+                end: position,
+            },
+        };
+        let comment = Comment {
+            range,
+            text: "gone".to_owned(),
+        };
+        let diff = SideBySide::new([Buffer::new("a\n"), Buffer::new("b\n")]);
+        let mut harness = Harness::new_ui_state(show_view, TextView::new(diff, vec![comment]));
+
+        harness.run();
+
+        assert_eq!(harness.state().gaps, vec![]);
     }
 }

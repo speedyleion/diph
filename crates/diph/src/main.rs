@@ -136,7 +136,12 @@ fn main() -> anyhow::Result<()> {
         }
         Err(FileLoadError::Read(error)) => return Err(error),
     };
-    let view = TextView::new(diff);
+    let labels = [files[0].label.as_path(), files[1].label.as_path()];
+    let comments = match &args.review {
+        Some(review) => review::load(review, labels)?,
+        None => Vec::new(),
+    };
+    let view = TextView::new(diff, comments);
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_inner_size([1400.0, 900.0]),

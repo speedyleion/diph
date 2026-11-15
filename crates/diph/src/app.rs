@@ -303,10 +303,10 @@ mod tests {
     };
 
     fn test_view() -> TextView {
-        TextView::new(SideBySide::new([
-            Buffer::new("left\n"),
-            Buffer::new("right\n"),
-        ]))
+        TextView::new(
+            SideBySide::new([Buffer::new("left\n"), Buffer::new("right\n")]),
+            Vec::new(),
+        )
     }
 
     fn test_files(right_path: Option<PathBuf>) -> [SideFile; 2] {
@@ -525,10 +525,13 @@ mod tests {
                 saveable: true,
             },
         ];
-        let mut view = TextView::new(SideBySide::new([
-            Buffer::new("original left\n"),
-            Buffer::new("original right\n"),
-        ]));
+        let mut view = TextView::new(
+            SideBySide::new([
+                Buffer::new("original left\n"),
+                Buffer::new("original right\n"),
+            ]),
+            Vec::new(),
+        );
         std::fs::write(&files[0].path, "reloaded left\n").unwrap();
         std::fs::write(&files[1].path, "reloaded right\n").unwrap();
         let mut save_message = None;
@@ -573,10 +576,13 @@ mod tests {
                 saveable: true,
             },
         ];
-        let mut view = TextView::new(SideBySide::new([
-            Buffer::new("original left\n"),
-            Buffer::new("original right\n"),
-        ]));
+        let mut view = TextView::new(
+            SideBySide::new([
+                Buffer::new("original left\n"),
+                Buffer::new("original right\n"),
+            ]),
+            Vec::new(),
+        );
         std::fs::write(&files[0].path, "changed left\n").unwrap();
         match right_contents {
             Some(contents) => std::fs::write(&right, contents).unwrap(),
@@ -613,10 +619,13 @@ mod tests {
                 saveable: true,
             },
         ];
-        let mut view = TextView::new(SideBySide::new([
-            Buffer::new("original left\n"),
-            Buffer::new("original right\n"),
-        ]));
+        let mut view = TextView::new(
+            SideBySide::new([
+                Buffer::new("original left\n"),
+                Buffer::new("original right\n"),
+            ]),
+            Vec::new(),
+        );
         std::fs::write(&files[1].path, b"reloaded \xff\n").unwrap();
         let mut save_message = None;
 
