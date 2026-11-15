@@ -193,7 +193,9 @@ impl TextView {
             theme: Arc::new(theme),
         };
         view.reset_diff_state();
-        view.step_change(1);
+        if !view.diff.changes().is_empty() {
+            view.jump_to_change(0);
+        }
         view
     }
 
@@ -858,18 +860,34 @@ impl TextView {
         self.scroll_to_top_row = Some(top_row(row, rows_in_view));
     }
 
-    /// Moves `delta` changes forward or back, stopping at the first and last,
-    /// and moves the cursor to the change on its side.
+    /// Moves to the change before or after the cursor, if there is one.
     fn step_change(&mut self, delta: isize) {
-        let Some(last) = self.diff.changes().len().checked_sub(1) else {
+        let Some((side, position)) = self.cursor_position() else {
             return;
         };
-        let next = match self.current_change {
-            None => 0,
-            Some(c) => c.saturating_add_signed(delta).min(last),
+        let cursor_row = self.diff.row_of(side, position.line);
+        let changes = self.diff.changes();
+        let next = match delta > 0 {
+            true => changes.iter().position(|&row| row > cursor_row),
+            false => match self.diff.rows()[cursor_row].kind {
+                RowKind::Equal => changes
+                    .partition_point(|&row| row < cursor_row)
+                    .checked_sub(1),
+                _ => changes
+                    .partition_point(|&row| row <= cursor_row)
+                    .checked_sub(2),
+            },
         };
-        self.current_change = Some(next);
-        let row = self.diff.changes()[next];
+        let Some(next) = next else {
+            return;
+        };
+        self.jump_to_change(next);
+    }
+
+    /// Moves the cursor to `index` of the changes and scrolls it into view.
+    fn jump_to_change(&mut self, index: usize) {
+        self.current_change = Some(index);
+        let row = self.diff.changes()[index];
         let view_row = self.view_rows().view_row(row);
         self.scroll_to_top_row = Some(view_row.saturating_sub(CONTEXT_ROWS));
         if let Some(side) = self.cursor_side
@@ -1612,6 +1630,66 @@ mod tests {
         harness.key_press_modifiers(egui::Modifiers::SHIFT, Key::F7);
         harness.run();
         harness.get_by_label("change 2 of 3");
+    }
+
+    #[test]
+    fn next_change_uses_the_cursor_position() {
+        let mut view = three_changes();
+        view.cursor.set(
+            &view.diff.buffers()[1],
+            Position {
+                line: 20,
+                column: 0,
+            },
+        );
+
+        view.step_change(1);
+
+        assert_eq!(view.current_change, Some(2));
+    }
+
+    #[test]
+    fn previous_change_uses_the_cursor_position() {
+        let mut view = three_changes();
+        view.step_change(1);
+        view.step_change(1);
+        view.cursor.set(
+            &view.diff.buffers()[1],
+            Position {
+                line: 10,
+                column: 0,
+            },
+        );
+
+        view.step_change(-1);
+
+        assert_eq!(view.current_change, Some(0));
+    }
+
+    #[test]
+    fn previous_change_skips_the_change_under_the_cursor() {
+        let left: String = (0..30).map(|i| format!("line {i}\n")).collect();
+        let right = left
+            .replace("line 5\n", "line five\n")
+            .replace("line 15\nline 16\n", "line fifteen\nline sixteen\n")
+            .replace("line 25\n", "line twenty-five\n");
+        let mut view = TextView::new(
+            SideBySide::new([Buffer::new(&left), Buffer::new(&right)]),
+            Vec::new(),
+        );
+        view.step_change(1);
+        view.step_change(1);
+        view.cursor.set(
+            &view.diff.buffers()[1],
+            Position {
+                line: 16,
+                column: 0,
+            },
+        );
+
+        view.step_change(-1);
+
+        assert_eq!(view.current_change, Some(0));
     }
 
     /// The view of 200 equal lines, after pressing `keys` one per frame.
