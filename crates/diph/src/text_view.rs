@@ -154,7 +154,7 @@ pub struct TextView {
 }
 
 impl TextView {
-    /// A view of `diff`, with `comments` saved on it.
+    /// A view of `diff`.
     pub fn new(diff: SideBySide, comments: Vec<Comment>) -> Self {
         let buffers = diff.buffers();
         // The right side, unless only the left has lines.

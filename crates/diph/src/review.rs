@@ -66,7 +66,7 @@ impl ReviewComment {
         }
     }
 
-    /// The comment this stores, if its side is shown as its path.
+    /// The stored comment if it's for one of the provided `paths`
     fn comment(self, paths: [&Path; 2]) -> Option<Comment> {
         let side = match self.side {
             Side::Left => 0,
