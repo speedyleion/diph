@@ -35,6 +35,8 @@ crate descriptions, and `--help` text: describe what the code does now.
 - A doc comment states what a caller gets: inputs, outputs, and
   guarantees. Leave out how the function computes it and what callers do
   with the result.
+- Describe a return value by what it means for every value its type can
+  hold, not by the one case that produces it today.
 - Don't repeat what the signature already says, such as the return type
   or that there are two of something.
 - Don't document behavior anyone would expect, such as a typed key
