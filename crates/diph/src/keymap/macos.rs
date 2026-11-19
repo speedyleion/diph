@@ -4,10 +4,6 @@ pub(crate) fn save_shortcut() -> KeyboardShortcut {
     KeyboardShortcut::new(Modifiers::COMMAND, Key::S)
 }
 
-pub(crate) fn save_comment_shortcut() -> KeyboardShortcut {
-    KeyboardShortcut::new(Modifiers::COMMAND, Key::Enter)
-}
-
 pub(crate) fn reload_shortcut() -> KeyboardShortcut {
     KeyboardShortcut::new(Modifiers::COMMAND, Key::R)
 }
