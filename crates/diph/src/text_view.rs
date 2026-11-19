@@ -118,6 +118,10 @@ pub struct TextView {
     top_row: usize,
     /// Rows of the view wholly in view in the last frame.
     rows_in_view: usize,
+    /// How far the text of both sides is scrolled left, in points.
+    scroll_x: f32,
+    /// The cursor position the view last scrolled horizontally to show.
+    scrolled_to_cursor: Option<(usize, Position)>,
     /// The side with the cursor, 0 for the left and 1 for the right. `None`
     /// when neither side has lines.
     cursor_side: Option<usize>,
@@ -179,6 +183,8 @@ impl TextView {
             scroll_to_top_row: None,
             top_row: 0,
             rows_in_view: 0,
+            scroll_x: 0.0,
+            scrolled_to_cursor: None,
             mode: Mode::Normal,
             key_handled: false,
             normal_keys: normal_keymap(),
@@ -919,6 +925,11 @@ impl TextView {
             font,
             bar_cursor: self.mode == Mode::Insert,
             palette: self.palette,
+            scroll_x: 0.0,
+        };
+        let layout = RowLayout {
+            scroll_x: self.scroll_x(ui, &layout),
+            ..layout
         };
 
         ui.spacing_mut().item_spacing.y = 0.0;
@@ -984,6 +995,51 @@ impl TextView {
         self.top_row = top.ceil() as usize;
         self.rows_in_view = (bottom.floor() as usize).saturating_sub(self.top_row);
         top..bottom
+    }
+
+    /// Updates and returns how far the text is scrolled left: by the
+    /// horizontal mouse wheel over the rows, up to past the end of the
+    /// widest line in view, and the least that shows the cursor once it
+    /// has moved.
+    fn scroll_x(&mut self, ui: &egui::Ui, layout: &RowLayout) -> f32 {
+        let text_width = layout.half_width - layout.gutter_width;
+        let hovered = ui.rect_contains_pointer(ui.available_rect_before_wrap());
+        let wheel = ui.input(|i| i.smooth_scroll_delta.x);
+        if hovered && wheel != 0.0 {
+            let widest = self.widest_line_in_view(ui, layout);
+            let max_scroll = (widest + layout.char_width - text_width).max(self.scroll_x);
+            self.scroll_x = (self.scroll_x - wheel).min(max_scroll).max(0.0);
+        }
+        let cursor = self.cursor_position();
+        if cursor != self.scrolled_to_cursor {
+            self.scrolled_to_cursor = cursor;
+            if let Some((side, position)) = cursor {
+                let text = &self.diff.buffers()[side].lines()[position.line];
+                let galley = layout.layout_line(ui, text);
+                let glyphs = galley.rows.first().map_or(&[][..], |r| &r.glyphs);
+                let (x, width) = layout.cursor_span(glyphs, position.column);
+                self.scroll_x = self.scroll_x.max(x + width - text_width).min(x);
+            }
+        }
+        self.scroll_x
+    }
+
+    /// Width of the widest line on the rows in view in the last frame.
+    fn widest_line_in_view(&self, ui: &egui::Ui, layout: &RowLayout) -> f32 {
+        let view_rows = self.view_rows();
+        let rows = self.diff.rows();
+        let buffers = self.diff.buffers();
+        // Includes the rows partly in view above and below.
+        let end = (self.top_row + self.rows_in_view + 1).min(view_rows.len());
+        (self.top_row.saturating_sub(1)..end)
+            .filter_map(|view_row| match view_rows.at(view_row) {
+                ViewRow::Diff(row) => Some(&rows[row]),
+                ViewRow::Gap { .. } => None,
+            })
+            .flat_map(|row| [&row.left, &row.right].into_iter().enumerate())
+            .filter_map(|(side, line)| Some(&buffers[side].lines()[line.as_ref()?.index]))
+            .map(|text| layout.layout_line(ui, text).size().x)
+            .fold(0.0, f32::max)
     }
 }
 
@@ -1136,6 +1192,8 @@ struct RowLayout {
     /// Whether the cursor is a bar before its column, as in insert mode.
     bar_cursor: bool,
     palette: Palette,
+    /// How far the text is scrolled left, past the line numbers.
+    scroll_x: f32,
 }
 
 struct HalfLine<'a> {
@@ -1219,7 +1277,9 @@ impl RowLayout {
                 self.paint_cursor(painter, half, pos, glyphs, c.column);
             }
             if let Some(click) = click.filter(|p| half.contains(*p)) {
-                let column = column_at(glyphs, click.x - pos.x);
+                // A click on the line number is on the first column in view.
+                let text_left = half.left() + self.gutter_width;
+                let column = column_at(glyphs, click.x.max(text_left) - pos.x);
                 let line = line.index;
                 clicked = Some((side, Position { line, column }));
             }
@@ -1309,15 +1369,11 @@ impl RowLayout {
         column: usize,
     ) {
         let glyph = glyphs.get(column);
-        let end_x = glyphs.last().map_or(0.0, Glyph::max_x);
-        let x = pos.x + glyph.map_or(end_x, |g| g.pos.x);
-        let width = match (self.bar_cursor, glyph) {
-            (true, _) => CURSOR_BAR_WIDTH,
-            (false, Some(g)) => g.advance_width,
-            (false, None) => self.char_width,
-        };
+        let (x, width) = self.cursor_span(glyphs, column);
+        let x = pos.x + x;
         let block = Rect::from_x_y_ranges(x..=x + width, half.y_range());
-        let text_rect = Rect::from_min_max(pos2(pos.x, half.top()), half.max);
+        let text_left = half.left() + self.gutter_width;
+        let text_rect = Rect::from_min_max(pos2(text_left, half.top()), half.max);
         let painter = painter.with_clip_rect(text_rect);
         painter.rect_filled(block, 0.0, self.palette.cursor);
         if let Some(glyph) = glyph.filter(|_| !self.bar_cursor) {
@@ -1325,6 +1381,26 @@ impl RowLayout {
             let color = self.palette.cursor_text;
             painter.text(block.left_center(), align, glyph.chr, font, color);
         }
+    }
+
+    /// The x from the line's start and the width of the cursor at `column`
+    /// of a line whose layout has `glyphs`.
+    fn cursor_span(&self, glyphs: &[Glyph], column: usize) -> (f32, f32) {
+        let glyph = glyphs.get(column);
+        let end_x = glyphs.last().map_or(0.0, Glyph::max_x);
+        let x = glyph.map_or(end_x, |g| g.pos.x);
+        let width = match (self.bar_cursor, glyph) {
+            (true, _) => CURSOR_BAR_WIDTH,
+            (false, Some(g)) => g.advance_width,
+            (false, None) => self.char_width,
+        };
+        (x, width)
+    }
+
+    /// Lays out `text` in the font of lines, without their formatting.
+    fn layout_line(&self, ui: &egui::Ui, text: &str) -> Arc<Galley> {
+        let font = self.font.clone();
+        ui.fonts_mut(|f| f.layout_no_wrap(text.to_owned(), font, Color32::PLACEHOLDER))
     }
 
     /// Paints one half of a row that has a line: the background, the line
@@ -1386,7 +1462,7 @@ impl RowLayout {
                 active,
             ))
         });
-        let pos = pos2(gutter_right, mid_y - galley.size().y / 2.0);
+        let pos = pos2(gutter_right - self.scroll_x, mid_y - galley.size().y / 2.0);
         painter
             .with_clip_rect(text_rect)
             .galley(pos, galley.clone(), self.palette.text);
@@ -1925,6 +2001,54 @@ mod tests {
         );
     }
 
+    /// A view of a line too long to fit beside a short one, with the cursor
+    /// at the start of the long line.
+    fn long_line() -> Harness<'static, TextView> {
+        let text = format!("{}\nshort\n", "x".repeat(500));
+        let diff = SideBySide::new([Buffer::new(&text), Buffer::new(&text)]);
+        let mut harness = Harness::new_ui_state(show_view, TextView::new(diff, Vec::new()));
+        harness.run();
+        harness
+    }
+
+    #[yare::parameterized(
+        moving_to_the_end_scrolls_right = { "$", true },
+        moving_back_to_the_start_scrolls_left = { "$ ^", false },
+    )]
+    fn the_view_scrolls_horizontally_to_keep_the_cursor_in_view(keys: &str, scrolled: bool) {
+        let mut harness = long_line();
+        press(&mut harness, keys);
+        assert_eq!(harness.state().scroll_x > 0.0, scrolled);
+    }
+
+    #[test]
+    fn the_cursor_at_the_end_of_a_long_line_is_in_view() {
+        let mut harness = long_line();
+        press(&mut harness, "$");
+        let font = TextStyle::Monospace.resolve(&harness.ctx.global_style());
+        let char_width = harness.ctx.fonts_mut(|f| f.glyph_width(&font, '0'));
+        let view = harness.state();
+        let x = view.cursor_position().unwrap().1.column as f32 * char_width - view.scroll_x;
+        // Each half's text is under half the window wide.
+        let half_width = harness.ctx.content_rect().width() / 2.0;
+        assert!((0.0..half_width).contains(&x), "{x} out of 0..{half_width}");
+    }
+
+    #[test]
+    fn a_horizontal_wheel_scrolls_the_text() {
+        let mut harness = long_line();
+        harness.hover_at(harness.ctx.content_rect().center());
+        harness.event(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: vec2(-100.0, 0.0),
+            phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Unknown,
+            modifiers: Modifiers::NONE,
+        });
+        harness.run();
+        assert!(harness.state().scroll_x > 0.0);
+    }
+
     #[test]
     fn stepping_to_a_change_moves_the_cursor_to_it() {
         let mut harness = Harness::new_ui_state(show_view, three_changes());
@@ -2399,6 +2523,7 @@ mod tests {
             half_width: 100.0,
             bar_cursor: false,
             palette: Palette::new(&Theme::default()),
+            scroll_x: 0.0,
         }
     }
 
