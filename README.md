@@ -16,8 +16,9 @@ to show a file's path in the repository instead of git's temporary file.
 ## Review comments
 
 Pressing `c` in normal mode will start a review comment at the cursor position.
-Enter saves the comment, and Shift+Enter starts a new line in it. Pressing `c`
-on a commented line edits the comment. Saving an empty comment delets it.
+Enter or the Comment button saves the comment, and Shift+Enter starts a new line
+in it. Escape or the Cancel button discards it. Pressing `c` on a commented line
+edits the comment. Saving an empty comment delets it.
 `--review <file>` specifies a file to save review comments to. Comments from
 multiple files can be written to the same review file. Re-opening a file in
 `diph` and adding or removing comments will replace all comments in the review

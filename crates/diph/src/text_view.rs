@@ -10,9 +10,9 @@ use diph_core::{
     Buffer, Edit, Highlighter, Line, Position, Row, RowKind, SideBySide, SideColors, Span, Theme,
 };
 use eframe::egui::{
-    self, Align2, Color32, CursorIcon, FontId, Galley, Painter, Pos2, Rect, ScrollArea, Sense,
-    Stroke, StrokeKind, TextFormat, TextStyle, UiBuilder, epaint::text::Glyph, pos2,
-    text::LayoutJob, vec2,
+    self, Align, Align2, Color32, CursorIcon, FontId, Galley, Layout, Painter, Pos2, Rect,
+    ScrollArea, Sense, Stroke, StrokeKind, TextFormat, TextStyle, UiBuilder, epaint::text::Glyph,
+    pos2, text::LayoutJob, vec2,
 };
 use itertools::{
     EitherOrBoth::{Both, Left, Right},
@@ -354,7 +354,9 @@ impl TextView {
         });
     }
 
-    pub(crate) fn show_diff(&mut self, ui: &mut egui::Ui) {
+    /// Shows the diff, returning what a click on a comment box's button
+    /// asks of the app, if anything.
+    pub(crate) fn show_diff(&mut self, ui: &mut egui::Ui) -> Option<ViewEvent> {
         if let Some(rx) = &self.colors_rx {
             for chunk in rx.try_iter() {
                 let side = chunk.side;
@@ -369,16 +371,20 @@ impl TextView {
                 colors.splice(start..end, chunk.lines);
             }
         }
-        egui::CentralPanel::default().show(ui, |ui| self.diff_ui(ui));
+        egui::CentralPanel::default()
+            .show(ui, |ui| self.diff_ui(ui))
+            .inner
     }
 
     /// The rows, beside a map of the whole diff that marks each side's
-    /// changes in a column of its own and covers the rows in view.
-    fn diff_ui(&mut self, ui: &mut egui::Ui) {
+    /// changes in a column of its own and covers the rows in view. Performs
+    /// the action of a clicked comment box button, returning what it asks of
+    /// the app, if anything.
+    fn diff_ui(&mut self, ui: &mut egui::Ui) -> Option<ViewEvent> {
         let rect = ui.available_rect_before_wrap();
         let (rows_rect, map) = rect.split_left_right_at_x(rect.right() - MAP_WIDTH);
         let rows_builder = UiBuilder::new().max_rect(rows_rect);
-        let in_view = ui.scope_builder(rows_builder, |ui| self.rows_ui(ui)).inner;
+        let (in_view, clicked) = ui.scope_builder(rows_builder, |ui| self.rows_ui(ui)).inner;
 
         let view_rows = self.view_rows();
         let y = map_y(map, view_rows.len(), in_view.end - in_view.start);
@@ -396,6 +402,11 @@ impl TextView {
         }
         let cover = Rect::from_x_y_ranges(map.x_range(), y(in_view.start)..=y(in_view.end));
         painter.rect_filled(cover, 0.0, self.palette.in_view_cover);
+        let action = clicked?;
+        // Shows what the click changed, such as the mode, without waiting
+        // for more input.
+        ui.ctx().request_repaint();
+        self.perform(ui.ctx(), action, None)
     }
 
     /// Performs the action of a pressed key, or in insert mode inserts typed
@@ -673,9 +684,13 @@ impl TextView {
         shows: Shows,
     ) -> CommentBox {
         let CommentRange { side, range, .. } = comment.range;
+        let button_rows = match shows {
+            Shows::Draft => 1,
+            Shows::Saved(_) => 0,
+        };
         let gap = Gap {
             after: self.diff.row_of(side, range.end.line),
-            rows: layout.comment_rows(ui, &comment.text),
+            rows: layout.comment_rows(ui, &comment.text) + button_rows,
         };
         CommentBox { gap, side, shows }
     }
@@ -904,8 +919,9 @@ impl TextView {
     }
 
     /// Both halves live in one scroll area so they always scroll together.
-    /// Returns the rows in view, in fractions of a row.
-    fn rows_ui(&mut self, ui: &mut egui::Ui) -> Range<f32> {
+    /// Returns the rows in view, in fractions of a row, and the action of a
+    /// clicked comment box button.
+    fn rows_ui(&mut self, ui: &mut egui::Ui) -> (Range<f32>, Option<Action>) {
         let font = TextStyle::Monospace.resolve(ui.style());
         let char_width = ui.fonts_mut(|f| f.glyph_width(&font, '0'));
         let line_count = self
@@ -960,6 +976,7 @@ impl TextView {
             comments,
         };
         let draft = &mut self.draft;
+        let mut clicked_button = None;
         let output = area.show_rows(ui, layout.row_height, view_rows.len(), |ui, range| {
             let first_in_view = range.start;
             // `last` paints every row, keeping the click if one was clicked.
@@ -974,7 +991,8 @@ impl TextView {
                             Shows::Saved(index) => BoxText::Saved(&comments[index].text),
                             Shows::Draft => BoxText::Draft(&mut draft.as_mut()?.text),
                         };
-                        layout.paint_gap(ui, &boxes[index], row, text, paint_box);
+                        let action = layout.paint_gap(ui, &boxes[index], row, text, paint_box);
+                        clicked_button = clicked_button.or(action);
                         None
                     }
                 })
@@ -994,7 +1012,7 @@ impl TextView {
         let bottom = top + output.inner_rect.height() / layout.row_height;
         self.top_row = top.ceil() as usize;
         self.rows_in_view = (bottom.floor() as usize).saturating_sub(self.top_row);
-        top..bottom
+        (top..bottom, clicked_button)
     }
 
     /// Updates and returns how far the text is scrolled left: by the
@@ -1041,6 +1059,21 @@ impl TextView {
             .map(|text| layout.layout_line(ui, text).size().x)
             .fold(0.0, f32::max)
     }
+}
+
+/// Lays out the Cancel and Comment buttons at the right of `rect`, returning
+/// the action of the one clicked.
+fn comment_buttons(ui: &mut egui::Ui, rect: Rect) -> Option<Action> {
+    let builder = UiBuilder::new()
+        .max_rect(rect)
+        .layout(Layout::right_to_left(Align::Center));
+    let mut ui = ui.new_child(builder);
+    // Without keyboard focus, which would take it from the comment's text.
+    let button = |text| egui::Button::new(text).sense(Sense::CLICK);
+    let comment = ui.add(button("Comment")).on_hover_text("Enter");
+    let cancel = ui.add(button("Cancel")).on_hover_text("Escape");
+    let comment = comment.clicked().then_some(Action::SaveComment);
+    comment.or(cancel.clicked().then_some(Action::DiscardComment))
 }
 
 /// Shortens `label` to fit `width`, keeping its filename when possible.
@@ -1300,7 +1333,8 @@ impl RowLayout {
 
     /// Paints row `row` of the gap `comment_box` takes, with filler on the
     /// other side. When `paint_box`, also paints the box over the whole gap,
-    /// holding `text`.
+    /// holding `text`, with Cancel and Comment buttons under a draft's text.
+    /// Returns the action of a clicked button.
     fn paint_gap(
         &self,
         ui: &mut egui::Ui,
@@ -1308,7 +1342,7 @@ impl RowLayout {
         row: usize,
         text: BoxText<'_>,
         paint_box: bool,
-    ) {
+    ) -> Option<Action> {
         let size = vec2(ui.available_width(), self.row_height);
         let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
         let (left, right) = rect.split_left_right_at_x(rect.left() + self.half_width);
@@ -1321,7 +1355,7 @@ impl RowLayout {
         painter.rect_filled(other, 0.0, self.palette.filler);
         painter.vline(left.right(), rect.y_range(), divider);
         if !paint_box {
-            return;
+            return None;
         }
         let top = rect.top() - row as f32 * self.row_height;
         let bottom = top + comment_box.gap.rows as f32 * self.row_height;
@@ -1335,8 +1369,14 @@ impl RowLayout {
                 let (font, color) = (self.font.clone(), self.palette.text);
                 let galley = painter.layout(text.to_owned(), font, color, text_rect.width());
                 painter.galley(text_rect.min, galley, color);
+                None
             }
-            BoxText::Draft(text) => self.edit_comment(ui, text_rect, text),
+            BoxText::Draft(text) => {
+                let buttons_top = text_rect.bottom() - self.row_height;
+                self.edit_comment(ui, text_rect.with_max_y(buttons_top), text);
+                let buttons_rect = text_rect.with_min_y(buttons_top);
+                comment_buttons(ui, buttons_rect.with_max_y(box_rect.bottom()))
+            }
         }
     }
 
@@ -1647,7 +1687,7 @@ fn column_at(glyphs: &[Glyph], x: f32) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use eframe::egui::{Key, Modifiers, text::ByteIndex};
+    use eframe::egui::{Key, Modifiers, accesskit::Role, text::ByteIndex};
     use egui_kittest::{Harness, kittest::Queryable as _};
 
     fn show_view(ui: &mut egui::Ui, view: &mut TextView) {
@@ -2829,8 +2869,8 @@ mod tests {
     }
 
     #[yare::parameterized(
-        an_empty_box_takes_two_rows_under_the_last_line = { "V j c", Gap { after: 1, rows: 2 } },
-        each_line_of_the_comment_adds_a_row = { "c x S-Enter y", Gap { after: 0, rows: 3 } },
+        an_empty_box_takes_three_rows_under_the_last_line = { "V j c", Gap { after: 1, rows: 3 } },
+        each_line_of_the_comment_adds_a_row = { "c x S-Enter y", Gap { after: 0, rows: 4 } },
     )]
     fn the_comment_box_takes_a_gap(keys: &str, gap: Gap) {
         let harness = typed_in_unchanged_file(keys);
@@ -2858,16 +2898,16 @@ mod tests {
 
     #[yare::parameterized(
         a_saved_comment_keeps_its_box_beside_the_draft = {
-            "c x Enter j c", vec![Gap { after: 0, rows: 2 }, Gap { after: 1, rows: 2 }]
+            "c x Enter j c", vec![Gap { after: 0, rows: 2 }, Gap { after: 1, rows: 3 }]
         },
         boxes_follow_the_order_of_their_lines = {
-            "j c x Enter k c", vec![Gap { after: 0, rows: 2 }, Gap { after: 1, rows: 2 }]
+            "j c x Enter k c", vec![Gap { after: 0, rows: 3 }, Gap { after: 1, rows: 2 }]
         },
         an_edited_comment_shows_only_the_draft_box = {
-            "c x Enter c", vec![Gap { after: 0, rows: 2 }]
+            "c x Enter c", vec![Gap { after: 0, rows: 3 }]
         },
         boxes_under_one_line_follow_each_other = {
-            "c x S-Enter y Enter V c", vec![Gap { after: 0, rows: 3 }, Gap { after: 0, rows: 2 }]
+            "c x S-Enter y Enter V c", vec![Gap { after: 0, rows: 3 }, Gap { after: 0, rows: 3 }]
         },
     )]
     fn comment_boxes(keys: &str, gaps: Vec<Gap>) {
@@ -2896,6 +2936,41 @@ mod tests {
         press(&mut harness, keys);
 
         assert_eq!(harness.state().1, expected);
+    }
+
+    #[yare::parameterized(
+        comment_saves_the_comment = { "Comment", vec!["x"] },
+        cancel_discards_the_comment = { "Cancel", vec![] },
+    )]
+    fn clicking_a_comment_box_button(label: &str, texts: Vec<&str>) {
+        let mut harness = typed_in_unchanged_file("c x");
+
+        harness.get_by_role_and_label(Role::Button, label).click();
+        harness.run();
+
+        let view = harness.state();
+        let saved: Vec<_> = view.comments.iter().map(|c| c.text.as_str()).collect();
+        assert_eq!((saved, view.mode_label()), (texts, None));
+    }
+
+    #[test]
+    fn clicking_comment_emits_a_comments_changed_event() {
+        let mut harness = Harness::new_ui_state(
+            |ui, (view, events): &mut (TextView, Vec<ViewEvent>)| {
+                view.process_input(ui);
+                events.extend(view.show_diff(ui));
+            },
+            (unchanged_file(), Vec::new()),
+        );
+        harness.run();
+        press(&mut harness, "c x");
+
+        harness
+            .get_by_role_and_label(Role::Button, "Comment")
+            .click();
+        harness.run();
+
+        assert_eq!(harness.state().1, [ViewEvent::CommentsChanged]);
     }
 
     #[test]

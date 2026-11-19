@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Cancel and Comment buttons under the review comment being written.
+
 ### Changed
 
 - Enter saves a review comment, and Shift+Enter starts a new line in it.
