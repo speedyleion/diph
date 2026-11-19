@@ -1694,7 +1694,8 @@ mod tests {
 
     /// The view of 200 equal lines, after pressing `keys` one per frame.
     /// `keys` are separated by spaces, each a character, uppercase with
-    /// Shift, a key name such as `Down`, or either with `C-` for Ctrl.
+    /// Shift, a key name such as `Down`, or either with `C-` for Ctrl or
+    /// `S-` for Shift.
     fn typed_in_unchanged_file(keys: &str) -> Harness<'static, TextView> {
         let mut harness = Harness::new_ui_state(show_view, unchanged_file());
         harness.run();
@@ -1737,7 +1738,13 @@ mod tests {
             Some(name) => (Modifiers::CTRL | Modifiers::COMMAND, name),
             None => (Modifiers::NONE, key),
         };
-        let shift = if matches!(name, "$" | "^") || (name.len() == 1 && name != name.to_lowercase())
+        let (shifted, name) = match name.strip_prefix("S-") {
+            Some(name) => (true, name),
+            None => (false, name),
+        };
+        let shift = if shifted
+            || matches!(name, "$" | "^")
+            || (name.len() == 1 && name != name.to_lowercase())
         {
             Modifiers::SHIFT
         } else {
@@ -2698,7 +2705,7 @@ mod tests {
 
     #[yare::parameterized(
         an_empty_box_takes_two_rows_under_the_last_line = { "V j c", Gap { after: 1, rows: 2 } },
-        each_line_of_the_comment_adds_a_row = { "c x Enter y", Gap { after: 0, rows: 3 } },
+        each_line_of_the_comment_adds_a_row = { "c x S-Enter y", Gap { after: 0, rows: 3 } },
     )]
     fn the_comment_box_takes_a_gap(keys: &str, gap: Gap) {
         let harness = typed_in_unchanged_file(keys);
@@ -2707,13 +2714,14 @@ mod tests {
     }
 
     #[yare::parameterized(
-        ctrl_enter_saves_the_comment = { "c x C-Enter", vec!["x"] },
-        an_empty_comment_is_not_saved = { "c C-Enter", vec![] },
+        enter_saves_the_comment = { "c x Enter", vec!["x"] },
+        an_empty_comment_is_not_saved = { "c Enter", vec![] },
         escape_does_not_save_the_comment = { "c x Escape", vec![] },
-        c_on_a_commented_line_edits_its_comment = { "c x C-Enter c y C-Enter", vec!["xy"] },
-        emptying_a_comment_deletes_it = { "c x C-Enter c Backspace C-Enter", vec![] },
-        escape_leaves_an_edited_comment_as_it_was = { "c x C-Enter c y Escape", vec!["x"] },
-        c_with_a_selection_adds_a_comment = { "c x C-Enter V c y C-Enter", vec!["x", "y"] },
+        c_on_a_commented_line_edits_its_comment = { "c x Enter c y Enter", vec!["xy"] },
+        emptying_a_comment_deletes_it = { "c x Enter c Backspace Enter", vec![] },
+        escape_leaves_an_edited_comment_as_it_was = { "c x Enter c y Escape", vec!["x"] },
+        c_with_a_selection_adds_a_comment = { "c x Enter V c y Enter", vec!["x", "y"] },
+        shift_enter_starts_a_new_line = { "c x S-Enter y Enter", vec!["x\ny"] },
     )]
     fn saved_comments(keys: &str, texts: Vec<&str>) {
         let harness = typed_in_unchanged_file(keys);
@@ -2725,16 +2733,16 @@ mod tests {
 
     #[yare::parameterized(
         a_saved_comment_keeps_its_box_beside_the_draft = {
-            "c x C-Enter j c", vec![Gap { after: 0, rows: 2 }, Gap { after: 1, rows: 2 }]
+            "c x Enter j c", vec![Gap { after: 0, rows: 2 }, Gap { after: 1, rows: 2 }]
         },
         boxes_follow_the_order_of_their_lines = {
-            "j c x C-Enter k c", vec![Gap { after: 0, rows: 2 }, Gap { after: 1, rows: 2 }]
+            "j c x Enter k c", vec![Gap { after: 0, rows: 2 }, Gap { after: 1, rows: 2 }]
         },
         an_edited_comment_shows_only_the_draft_box = {
-            "c x C-Enter c", vec![Gap { after: 0, rows: 2 }]
+            "c x Enter c", vec![Gap { after: 0, rows: 2 }]
         },
         boxes_under_one_line_follow_each_other = {
-            "c x Enter y C-Enter V c", vec![Gap { after: 0, rows: 3 }, Gap { after: 0, rows: 2 }]
+            "c x S-Enter y Enter V c", vec![Gap { after: 0, rows: 3 }, Gap { after: 0, rows: 2 }]
         },
     )]
     fn comment_boxes(keys: &str, gaps: Vec<Gap>) {
@@ -2744,10 +2752,10 @@ mod tests {
     }
 
     #[yare::parameterized(
-        saving_a_comment = { "c x C-Enter", vec![ViewEvent::CommentsChanged] },
-        not_saving_an_empty_comment = { "c C-Enter", vec![] },
+        saving_a_comment = { "c x Enter", vec![ViewEvent::CommentsChanged] },
+        not_saving_an_empty_comment = { "c Enter", vec![] },
         deleting_a_comment = {
-            "c x C-Enter c Backspace C-Enter",
+            "c x Enter c Backspace Enter",
             vec![ViewEvent::CommentsChanged, ViewEvent::CommentsChanged]
         },
     )]
@@ -2767,7 +2775,7 @@ mod tests {
 
     #[test]
     fn review_comments_quote_the_commented_lines_of_their_side() {
-        let harness = typed_in_unchanged_file("j V j c x C-Enter");
+        let harness = typed_in_unchanged_file("j V j c x Enter");
 
         let paths = [Path::new("old.rs"), Path::new("new.rs")];
         let comments = harness.state().review_comments(paths);
@@ -2912,7 +2920,7 @@ mod tests {
 
     #[test]
     fn a_comment_moves_with_lines_typed_above_it() {
-        let harness = typed_in_unchanged_file("j c x C-Enter k O Escape");
+        let harness = typed_in_unchanged_file("j c x Enter k O Escape");
 
         let lines: Vec<_> = harness
             .state()

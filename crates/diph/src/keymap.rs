@@ -9,7 +9,7 @@ mod platform;
 #[path = "keymap/other.rs"]
 mod platform;
 
-pub(crate) use platform::{reload_shortcut, save_comment_shortcut, save_shortcut};
+pub(crate) use platform::{reload_shortcut, save_shortcut};
 
 /// The digit keys, in order from 0.
 const DIGITS: [Key; 10] = [
@@ -175,12 +175,10 @@ pub(crate) fn insert_keymap() -> Keymap<Action> {
 }
 
 pub(crate) fn comment_keymap() -> Keymap<Action> {
+    let key = |key| KeyboardShortcut::new(Modifiers::NONE, key);
     Keymap::new([
-        (vec![save_comment_shortcut()], Action::SaveComment),
-        (
-            vec![KeyboardShortcut::new(Modifiers::NONE, Key::Escape)],
-            Action::DiscardComment,
-        ),
+        (vec![key(Key::Enter)], Action::SaveComment),
+        (vec![key(Key::Escape)], Action::DiscardComment),
     ])
 }
 
