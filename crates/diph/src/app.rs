@@ -150,7 +150,16 @@ impl eframe::App for App {
             startup_time,
             self.review.as_deref(),
         );
-        self.view.show_diff(ui);
+        if let Some(event) = self.view.show_diff(ui) {
+            handle_view_event(
+                event,
+                &ctx,
+                &mut self.files,
+                &mut self.view,
+                self.review.as_deref(),
+                &mut self.save_message,
+            );
+        }
     }
 
     fn persist_egui_memory(&self) -> bool {
