@@ -354,8 +354,7 @@ impl TextView {
         });
     }
 
-    /// Shows the diff, returning what a click on a comment box's button
-    /// asks of the app, if anything.
+    /// Shows the diff, returning what it asks of the app, if anything.
     pub(crate) fn show_diff(&mut self, ui: &mut egui::Ui) -> Option<ViewEvent> {
         if let Some(rx) = &self.colors_rx {
             for chunk in rx.try_iter() {
@@ -377,14 +376,13 @@ impl TextView {
     }
 
     /// The rows, beside a map of the whole diff that marks each side's
-    /// changes in a column of its own and covers the rows in view. Performs
-    /// the action of a clicked comment box button, returning what it asks of
-    /// the app, if anything.
+    /// changes in a column of its own and covers the rows in view. Returns
+    /// what the view asks of the app, if anything.
     fn diff_ui(&mut self, ui: &mut egui::Ui) -> Option<ViewEvent> {
         let rect = ui.available_rect_before_wrap();
         let (rows_rect, map) = rect.split_left_right_at_x(rect.right() - MAP_WIDTH);
         let rows_builder = UiBuilder::new().max_rect(rows_rect);
-        let (in_view, clicked) = ui.scope_builder(rows_builder, |ui| self.rows_ui(ui)).inner;
+        let (in_view, action) = ui.scope_builder(rows_builder, |ui| self.rows_ui(ui)).inner;
 
         let view_rows = self.view_rows();
         let y = map_y(map, view_rows.len(), in_view.end - in_view.start);
@@ -402,8 +400,8 @@ impl TextView {
         }
         let cover = Rect::from_x_y_ranges(map.x_range(), y(in_view.start)..=y(in_view.end));
         painter.rect_filled(cover, 0.0, self.palette.in_view_cover);
-        let action = clicked?;
-        // Shows what the click changed, such as the mode, without waiting
+        let action = action?;
+        // Shows what the action changed, such as the mode, without waiting
         // for more input.
         ui.ctx().request_repaint();
         self.perform(ui.ctx(), action, None)
@@ -919,8 +917,8 @@ impl TextView {
     }
 
     /// Both halves live in one scroll area so they always scroll together.
-    /// Returns the rows in view, in fractions of a row, and the action of a
-    /// clicked comment box button.
+    /// Returns the rows in view, in fractions of a row, and the action they
+    /// ask for, if any.
     fn rows_ui(&mut self, ui: &mut egui::Ui) -> (Range<f32>, Option<Action>) {
         let font = TextStyle::Monospace.resolve(ui.style());
         let char_width = ui.fonts_mut(|f| f.glyph_width(&font, '0'));
@@ -976,7 +974,7 @@ impl TextView {
             comments,
         };
         let draft = &mut self.draft;
-        let mut clicked_button = None;
+        let mut action = None;
         let output = area.show_rows(ui, layout.row_height, view_rows.len(), |ui, range| {
             let first_in_view = range.start;
             // `last` paints every row, keeping the click if one was clicked.
@@ -991,8 +989,8 @@ impl TextView {
                             Shows::Saved(index) => BoxText::Saved(&comments[index].text),
                             Shows::Draft => BoxText::Draft(&mut draft.as_mut()?.text),
                         };
-                        let action = layout.paint_gap(ui, &boxes[index], row, text, paint_box);
-                        clicked_button = clicked_button.or(action);
+                        action =
+                            action.or(layout.paint_gap(ui, &boxes[index], row, text, paint_box));
                         None
                     }
                 })
@@ -1012,7 +1010,7 @@ impl TextView {
         let bottom = top + output.inner_rect.height() / layout.row_height;
         self.top_row = top.ceil() as usize;
         self.rows_in_view = (bottom.floor() as usize).saturating_sub(self.top_row);
-        (top..bottom, clicked_button)
+        (top..bottom, action)
     }
 
     /// Updates and returns how far the text is scrolled left: by the
@@ -1334,7 +1332,7 @@ impl RowLayout {
     /// Paints row `row` of the gap `comment_box` takes, with filler on the
     /// other side. When `paint_box`, also paints the box over the whole gap,
     /// holding `text`, with Cancel and Comment buttons under a draft's text.
-    /// Returns the action of a clicked button.
+    /// Returns the action the box asks for, if any.
     fn paint_gap(
         &self,
         ui: &mut egui::Ui,
