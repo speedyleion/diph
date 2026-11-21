@@ -1807,6 +1807,40 @@ mod tests {
         assert_eq!(view.current_change, Some(0));
     }
 
+    #[yare::parameterized(
+        an_addition = {
+            "line 5\nline 15\nline 25\n",
+            "line five\nline 15\nadded\nline 25\n",
+            0,
+            1,
+        },
+        a_deletion = {
+            "line 5\nline 15\ndeleted\nline 25\n",
+            "line five\nline 15\nline 25\n",
+            1,
+            1,
+        },
+    )]
+    fn stepping_to_a_one_sided_change_places_cursor_before_it(
+        left: &str,
+        right: &str,
+        side: usize,
+        expected_line: usize,
+    ) {
+        let mut view = TextView::new(
+            SideBySide::new([Buffer::new(left), Buffer::new(right)]),
+            Vec::new(),
+        );
+        view.cursor_side = Some(side);
+        view.step_change(1);
+
+        assert_eq!(view.current_change, Some(1));
+        assert_eq!(
+            view.cursor.position(&view.diff.buffers()[side]).line,
+            expected_line
+        );
+    }
+
     /// The view of 200 equal lines, after pressing `keys` one per frame.
     /// `keys` are separated by spaces, each a character, uppercase with
     /// Shift, a key name such as `Down`, or either with `C-` for Ctrl or
