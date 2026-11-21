@@ -13,6 +13,11 @@ The `--label` argument specifies the filename to display on each side's title
 bar, the first for the left side and the second for the right. This can be used
 to show a file's path in the repository instead of git's temporary file.
 
+## Keyboard commands
+
+The full list of keys, grouped by the mode they act in, is in
+[docs/KEYBOARD.md](docs/KEYBOARD.md).
+
 ## Review comments
 
 Pressing `c` in normal mode will start a review comment at the cursor position.
