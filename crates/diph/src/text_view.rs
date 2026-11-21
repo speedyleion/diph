@@ -475,6 +475,7 @@ impl TextView {
             Action::LastLine => {
                 self.move_cursor(|c, b| c.go_to_line(b, counted_line.unwrap_or(usize::MAX)));
             }
+            Action::FirstColumn => self.move_cursor(|c, b| c.move_column(b, isize::MIN)),
             Action::LineStart => self.move_cursor(|c, b| c.go_to_line_start(b)),
             Action::LineEnd => self.move_cursor(|c, b| c.go_to_line_end(b)),
             Action::LeftSide => self.switch_side(0),
@@ -1884,6 +1885,7 @@ mod tests {
         a_count_before_k_moves_up = { "j j j 2 k", 1, 1, 0 },
         gg_moves_to_the_first_line = { "j j g g", 1, 0, 0 },
         shift_g_moves_to_the_last_line = { "G", 1, 199, 0 },
+        zero_moves_to_the_first_column = { "l l l 0", 1, 0, 0 },
         caret_moves_to_the_start_of_the_line = { "^", 1, 0, 0 },
         dollar_moves_to_the_end_of_the_line = { "$", 1, 0, 5 },
         ctrl_w_h_moves_to_the_left_side = { "j l C-w h", 0, 1, 1 },
@@ -2059,6 +2061,7 @@ mod tests {
     #[yare::parameterized(
         moving_to_the_end_scrolls_right = { "$", true },
         moving_back_to_the_start_scrolls_left = { "$ ^", false },
+        moving_back_to_the_first_column_scrolls_left = { "$ 0", false },
     )]
     fn the_view_scrolls_horizontally_to_keep_the_cursor_in_view(keys: &str, scrolled: bool) {
         let mut harness = long_line();
@@ -2513,6 +2516,12 @@ mod tests {
             SelectionKind::Character,
             Position { line: 0, column: 0 },
             Position { line: 0, column: 1 },
+        },
+        character_selection_extends_to_first_column = {
+            "l l l v 0",
+            SelectionKind::Character,
+            Position { line: 0, column: 3 },
+            Position { line: 0, column: 0 },
         },
         line_selection_extends_down = {
             "V j",
