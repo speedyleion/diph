@@ -131,13 +131,13 @@ impl SideBySide {
         self.line_rows[side][line]
     }
 
-    /// The first line of `side` in `row` or below it. When all of the side's
-    /// lines are above `row`, its last line instead. `None` when `side` has
-    /// no lines.
+    /// The line of `side` in `row` or above it. When all of the side's lines
+    /// are below `row`, its first line instead. `None` when `side` has no
+    /// lines.
     pub fn line_at(&self, side: usize, row: usize) -> Option<usize> {
         let rows = &self.line_rows[side];
-        let last = rows.len().checked_sub(1)?;
-        Some(rows.partition_point(|&r| r < row).min(last))
+        rows.first()?;
+        Some(rows.partition_point(|&r| r <= row).saturating_sub(1))
     }
 }
 
@@ -297,11 +297,17 @@ mod tests {
 
     #[yare::parameterized(
         a_row_with_a_line_has_that_line = { 0, 2, Some(2) },
-        a_row_without_one_has_the_line_below = { 1, 1, Some(1) },
+        a_row_without_one_has_the_line_above = { 1, 1, Some(0) },
         a_row_past_the_last_line_has_the_last_line = { 0, 9, Some(3) },
     )]
     fn line_at(side: usize, row: usize, line: Option<usize>) {
         assert_eq!(two_lines_deleted().line_at(side, row), line);
+    }
+
+    #[test]
+    fn a_row_before_the_first_line_has_the_first_line() {
+        let diff = SideBySide::new([Buffer::new("a\nb\n"), Buffer::new("b\n")]);
+        assert_eq!(diff.line_at(1, 0), Some(0));
     }
 
     #[test]
