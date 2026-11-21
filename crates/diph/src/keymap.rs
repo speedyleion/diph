@@ -57,6 +57,7 @@ pub(crate) enum Action {
     FirstLine,
     /// The line of the count, or the last line without one.
     LastLine,
+    FirstColumn,
     LineStart,
     LineEnd,
     LeftSide,
@@ -127,6 +128,7 @@ pub(crate) fn normal_keymap() -> Keymap<Action> {
         (vec![ctrl(Key::B)], Action::PageUp),
         (vec![key(Key::G), key(Key::G)], Action::FirstLine),
         (vec![shift(Key::G)], Action::LastLine),
+        (vec![key(Key::Num0)], Action::FirstColumn),
         (vec![shift(Key::Num6)], Action::LineStart),
         (vec![shift(Key::Num4)], Action::LineEnd),
         (vec![ctrl(Key::W), key(Key::H)], Action::LeftSide),
