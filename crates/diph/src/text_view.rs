@@ -539,11 +539,6 @@ impl TextView {
         self.marks[side].insert(letter, line);
     }
 
-    /// Returns the marks on each side as `(letter, line)` pairs.
-    pub(crate) fn marks(&self) -> &[HashMap<char, usize>; 2] {
-        &self.marks
-    }
-
     /// Moves marks on `side` with the text `edit` changed. A mark whose line
     /// moved goes where it went; a mark on a deleted line goes to the edit's
     /// start line.
@@ -3241,7 +3236,7 @@ mod tests {
     fn shift_marks_on_insert(at: Position, text: &str, expected_line: usize) {
         let mut view = view_with_mark();
         view.edit(1, |b| b.insert(at, text));
-        assert_eq!(view.marks()[1].get(&'a').copied(), Some(expected_line));
+        assert_eq!(view.marks[1].get(&'a').copied(), Some(expected_line));
     }
 
     #[test]
@@ -3254,7 +3249,7 @@ mod tests {
             let start_of_line_2 = Position { line: 2, column: 0 };
             b.delete(end_of_line_1..start_of_line_2)
         });
-        assert_eq!(view.marks()[1].get(&'a').copied(), Some(1));
+        assert_eq!(view.marks[1].get(&'a').copied(), Some(1));
     }
 
     #[test]
@@ -3267,13 +3262,13 @@ mod tests {
             let start_of_line_3 = Position { line: 3, column: 0 };
             b.delete(end_of_line_2..start_of_line_3)
         });
-        assert_eq!(view.marks()[1].get(&'a').copied(), Some(2));
+        assert_eq!(view.marks[1].get(&'a').copied(), Some(2));
     }
 
     #[test]
     fn an_edit_on_the_other_side_keeps_the_mark() {
         let mut view = view_with_mark();
         view.edit(0, |b| b.insert(Position { line: 1, column: 0 }, "\n"));
-        assert_eq!(view.marks()[1].get(&'a').copied(), Some(2));
+        assert_eq!(view.marks[1].get(&'a').copied(), Some(2));
     }
 }
