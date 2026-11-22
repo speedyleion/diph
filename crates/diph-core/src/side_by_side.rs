@@ -52,46 +52,34 @@ pub struct SideBySide {
 impl SideBySide {
     /// The diff of the left and right `buffers`.
     pub fn new(buffers: [Buffer; 2]) -> Self {
+        Self::with_anchors(buffers, &[])
+    }
+
+    /// The diff of the left and right `buffers`, with each pair in `anchors`
+    /// forcing a left line to align opposite a right line. Each pair is a
+    /// `(left_line, right_line)` index, and they must be sorted by left line
+    /// with no duplicate left or right lines. The anchor lines are always
+    /// aligned opposite each other; the lines before them are diffed
+    /// independently from the lines after them.
+    pub fn with_anchors(buffers: [Buffer; 2], anchors: &[(usize, usize)]) -> Self {
         let [left, right] = &buffers;
         let left_lines: Vec<_> = left.lines().iter().map(String::as_str).collect();
         let right_lines: Vec<_> = right.lines().iter().map(String::as_str).collect();
-        let diff = TextDiff::from_slices(&left_lines, &right_lines);
 
         let mut rows = Vec::new();
         let mut changes = Vec::new();
-        for op in diff.ops() {
-            let (tag, left, right) = op.as_tag_tuple();
-            // similar merges neighboring deletes and inserts into one op, so
-            // each differing op is a change of its own.
-            if tag != DiffTag::Equal {
-                changes.push(rows.len());
-            }
-            // Pair lines from the top of each block. In a changed block the
-            // longer side's leftovers have nothing opposite them.
-            for i in 0..left.len().max(right.len()) {
-                let left = (i < left.len()).then_some(left.start + i);
-                let right = (i < right.len()).then_some(right.start + i);
-                let (kind, (left_words, right_words)) = match (tag, left, right) {
-                    (DiffTag::Equal, ..) => (RowKind::Equal, Default::default()),
-                    (_, Some(l), Some(r)) => (
-                        RowKind::Changed,
-                        word_changes(left_lines[l], right_lines[r]),
-                    ),
-                    (_, Some(_), None) => (RowKind::LeftOnly, Default::default()),
-                    _ => (RowKind::RightOnly, Default::default()),
-                };
-                rows.push(Row {
-                    kind,
-                    left: left.map(|index| Line {
-                        index,
-                        changed_words: left_words,
-                    }),
-                    right: right.map(|index| Line {
-                        index,
-                        changed_words: right_words,
-                    }),
-                });
-            }
+
+        // Split the line ranges into segments at each anchor. Each segment is
+        // diffed independently; the anchor line closes the segment before it.
+        for (left_seg, right_seg) in segments(left_lines.len(), right_lines.len(), anchors) {
+            diff_segment(
+                &left_lines[left_seg.clone()],
+                &right_lines[right_seg.clone()],
+                left_seg.start,
+                right_seg.start,
+                &mut rows,
+                &mut changes,
+            );
         }
 
         let line_rows = [0, 1].map(|side| side_line_rows(&rows, side));
@@ -141,6 +129,71 @@ impl SideBySide {
     }
 }
 
+/// The left and right line ranges of each segment to diff independently.
+/// Anchors split the ranges: segment N covers up to and including the Nth
+/// anchor line, and the last segment covers the rest.
+fn segments(
+    left_len: usize,
+    right_len: usize,
+    anchors: &[(usize, usize)],
+) -> impl Iterator<Item = (Range<usize>, Range<usize>)> + '_ {
+    let starts = std::iter::once((0, 0)).chain(anchors.iter().map(|&(l, r)| (l + 1, r + 1)));
+    let ends = anchors
+        .iter()
+        .map(move |&(l, r)| ((l + 1).min(left_len), (r + 1).min(right_len)))
+        .chain(std::iter::once((left_len, right_len)));
+    starts
+        .zip(ends)
+        .map(|((ls, rs), (le, re))| (ls..le, rs..re))
+}
+
+/// Diffs `left_seg` against `right_seg`, appending to `rows` and `changes`.
+/// `left_offset` and `right_offset` are the starting line indices of the
+/// segments in their respective buffers, used to set each `Line`'s `index`.
+fn diff_segment(
+    left_seg: &[&str],
+    right_seg: &[&str],
+    left_offset: usize,
+    right_offset: usize,
+    rows: &mut Vec<Row>,
+    changes: &mut Vec<usize>,
+) {
+    let diff = TextDiff::from_slices(left_seg, right_seg);
+    for op in diff.ops() {
+        let (tag, left, right) = op.as_tag_tuple();
+        // similar merges neighboring deletes and inserts into one op, so
+        // each differing op is a change of its own.
+        if tag != DiffTag::Equal {
+            changes.push(rows.len());
+        }
+        // Pair lines from the top of each block. In a changed block the
+        // longer side's leftovers have nothing opposite them.
+        for i in 0..left.len().max(right.len()) {
+            let left = (i < left.len()).then_some(left.start + i);
+            let right = (i < right.len()).then_some(right.start + i);
+            let (kind, (left_words, right_words)) = match (tag, left, right) {
+                (DiffTag::Equal, ..) => (RowKind::Equal, Default::default()),
+                (_, Some(l), Some(r)) => {
+                    (RowKind::Changed, word_changes(left_seg[l], right_seg[r]))
+                }
+                (_, Some(_), None) => (RowKind::LeftOnly, Default::default()),
+                _ => (RowKind::RightOnly, Default::default()),
+            };
+            rows.push(Row {
+                kind,
+                left: left.map(|index| Line {
+                    index: index + left_offset,
+                    changed_words: left_words,
+                }),
+                right: right.map(|index| Line {
+                    index: index + right_offset,
+                    changed_words: right_words,
+                }),
+            });
+        }
+    }
+}
+
 /// The index into `rows` of each of `side`'s lines, in order.
 fn side_line_rows(rows: &[Row], side: usize) -> Vec<usize> {
     rows.iter()
@@ -187,6 +240,12 @@ mod tests {
     /// words in brackets.
     fn render(left: &str, right: &str) -> String {
         let diff = SideBySide::new([Buffer::new(left), Buffer::new(right)]);
+        render_diff(&diff)
+    }
+
+    /// Draws the rows of an already-built `diff` as text, in the same format
+    /// as `render`.
+    fn render_diff(diff: &SideBySide) -> String {
         let [left, right] = diff.buffers();
         let mut out = String::new();
         for row in diff.rows() {
@@ -314,6 +373,116 @@ mod tests {
     fn a_side_without_lines_has_no_line_at_any_row() {
         let diff = SideBySide::new([Buffer::new(""), Buffer::new("a\n")]);
         assert_eq!(diff.line_at(0, 0), None);
+    }
+
+    #[test]
+    fn one_anchor_aligns_the_two_segments_independently() {
+        let left = "foo\n}\nbar\n}\n";
+        let right = "bar\n}\nfoo\n}\n";
+        assert_snapshot!(render_diff(&SideBySide::with_anchors(
+            [Buffer::new(left), Buffer::new(right)],
+            &[(1, 3)],
+        )), @r"
+        >                           | 1 bar
+        >                           | 2 }
+          1 foo                     | 3 foo
+          2 }                       | 4 }
+        < 3 bar                     |
+        < 4 }                       |
+        changes at [0, 4]
+        ");
+        assert_snapshot!(render(left, right), @r"
+        >                           | 1 bar
+        >                           | 2 }
+          1 foo                     | 3 foo
+        < 2 }                       |
+        < 3 bar                     |
+          4 }                       | 4 }
+        changes at [0, 3]
+        ");
+    }
+
+    #[test]
+    fn multiple_anchors_produce_independent_segments() {
+        let left = "a\nb\nc\n";
+        let right = "b\na\nc\nb\n";
+        assert_snapshot!(render_diff(&SideBySide::with_anchors(
+            [Buffer::new(left), Buffer::new(right)],
+            &[(0, 1), (1, 3)],
+        )), @r"
+        >                           | 1 b
+          1 a                       | 2 a
+        >                           | 3 c
+          2 b                       | 4 b
+        < 3 c                       |
+        changes at [0, 2, 4]
+        ");
+        assert_snapshot!(render(left, right), @r"
+        >                           | 1 b
+          1 a                       | 2 a
+        < 2 b                       |
+          3 c                       | 3 c
+        >                           | 4 b
+        changes at [0, 2, 4]
+        ");
+    }
+
+    #[test]
+    fn anchor_on_the_first_line_constrains_the_first_segment() {
+        // Anchor (0, 1) with left "x\ny" and right "a\nx\ny": without an
+        // anchor "x" aligns opposite "x" with "a" right-only before it.
+        // With the anchor, segment 1 is "x" vs "a\nx" (a is right-only,
+        // x is equal) and segment 2 is "y" vs "y" (equal).
+        let left = "x\ny\n";
+        let right = "a\nx\ny\n";
+        let diff = SideBySide::with_anchors([Buffer::new(left), Buffer::new(right)], &[(0, 1)]);
+        assert_snapshot!(render_diff(&diff), @r"
+        >                           | 1 a
+          1 x                       | 2 x
+          2 y                       | 3 y
+        changes at [0]
+        ");
+        assert_eq!(diff.rows().len(), 3);
+        assert_snapshot!(render(left, right), @r"
+        >                           | 1 a
+          1 x                       | 2 x
+          2 y                       | 3 y
+        changes at [0]
+        ");
+    }
+
+    #[test]
+    fn anchor_on_the_last_line_constrains_the_final_segment() {
+        // Anchor (1, 2) with left "a\nz" and right "b\nc\nz": without an
+        // anchor the diff sees "a" vs "b\nc" as changes and "z" equal.
+        // With the anchor, segment 1 is "a\nz" vs "b\nc\nz" (a↔b changed,
+        // c right-only, z equal) and segment 2 is empty.
+        let left = "a\nz\n";
+        let right = "b\nc\nz\n";
+        let diff = SideBySide::with_anchors([Buffer::new(left), Buffer::new(right)], &[(1, 2)]);
+        assert_snapshot!(render_diff(&diff), @r"
+        ~ 1 [a]                     | 1 [b]
+        >                           | 2 c
+          2 z                       | 3 z
+        changes at [0]
+        ");
+        assert_eq!(diff.rows().len(), 3);
+        assert_snapshot!(render(left, right), @r"
+        ~ 1 [a]                     | 1 [b]
+        >                           | 2 c
+          2 z                       | 3 z
+        changes at [0]
+        ");
+    }
+
+    #[test]
+    fn no_anchors_matches_new() {
+        let left = "keep\nlet x = 1;\nlet y = 2;\ngone\ntail\n";
+        let right = "fresh\nkeep\nlet x = 10;\ntail\nextra\n";
+        let anchored = SideBySide::with_anchors([Buffer::new(left), Buffer::new(right)], &[]);
+        let plain = SideBySide::new([Buffer::new(left), Buffer::new(right)]);
+        assert_eq!(anchored.rows(), plain.rows());
+        assert_eq!(anchored.changes(), plain.changes());
     }
 
     /// The diff of four lines on the left against the first and last of
