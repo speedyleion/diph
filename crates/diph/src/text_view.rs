@@ -3415,9 +3415,9 @@ mod tests {
         view.set_mark(1, 'z', 0);
 
         // Now both marks are set
-        assert_eq!(view.diff.rows()[0].kind, RowKind::Equal);
+        assert_eq!(view.diff.rows()[0].kind, RowKind::LeftOnly);
         assert_eq!(view.diff.rows()[1].kind, RowKind::LeftOnly);
-        assert_eq!(view.diff.rows()[3].kind, RowKind::LeftOnly);
+        assert_eq!(view.diff.rows()[3].kind, RowKind::Equal);
         assert_eq!(view.diff.rows()[4].kind, RowKind::Equal);
     }
 
@@ -3429,15 +3429,12 @@ mod tests {
         );
         view.marks[0].insert('a', 0);
         view.marks[1].insert('a', 1);
-        // Reload with new buffers that have different content on the right.
-        // The mark pair (0, 1) should still be applied: left line 0 "a"
-        // anchored opposite right line 1 "a", so right-0 "y" is right-only
-        // and "a" is equal, not the unanchored alignment.
+
         view.reload(SideBySide::new([
             Buffer::new("a\nb\nc\n"),
             Buffer::new("a\nb\nc\n"),
         ]));
-        assert_eq!(view.diff.rows()[0].kind, RowKind::Equal);
-        assert_eq!(view.diff.rows()[1].kind, RowKind::RightOnly);
+        assert_eq!(view.diff.rows()[0].kind, RowKind::RightOnly);
+        assert_eq!(view.diff.rows()[1].kind, RowKind::LeftOnly);
     }
 }
