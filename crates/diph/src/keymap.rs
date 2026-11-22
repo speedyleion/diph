@@ -81,6 +81,10 @@ pub(crate) enum Action {
     NewLine,
     Tab,
     Backspace,
+    /// Sets the named mark on the cursor's side and line.
+    SetMark(char),
+    /// Clears the named mark on the cursor's side.
+    DeleteMark(char),
 }
 
 /// Where insert mode puts the cursor.
@@ -106,58 +110,71 @@ pub(crate) fn normal_keymap() -> Keymap<Action> {
     let key = |key| KeyboardShortcut::new(Modifiers::NONE, key);
     let shift = |key| KeyboardShortcut::new(Modifiers::SHIFT, key);
     let ctrl = |key| KeyboardShortcut::new(Modifiers::CTRL, key);
-    Keymap::new([
-        (vec![key(Key::P)], Action::PrevChange),
-        (vec![shift(Key::F7)], Action::PrevChange),
-        (vec![key(Key::N)], Action::NextChange),
-        (vec![key(Key::F7)], Action::NextChange),
-        (vec![key(Key::Z), key(Key::B)], Action::CursorBottom),
-        (vec![key(Key::Z), key(Key::T)], Action::CursorTop),
-        (vec![key(Key::Z), key(Key::Z)], Action::CursorCenter),
-        (vec![key(Key::H)], Action::CharLeft),
-        (vec![key(Key::ArrowLeft)], Action::CharLeft),
-        (vec![key(Key::L)], Action::CharRight),
-        (vec![key(Key::ArrowRight)], Action::CharRight),
-        (vec![key(Key::J)], Action::LineDown),
-        (vec![key(Key::ArrowDown)], Action::LineDown),
-        (vec![key(Key::K)], Action::LineUp),
-        (vec![key(Key::ArrowUp)], Action::LineUp),
-        (vec![ctrl(Key::D)], Action::HalfPageDown),
-        (vec![ctrl(Key::U)], Action::HalfPageUp),
-        (vec![ctrl(Key::F)], Action::PageDown),
-        (vec![ctrl(Key::B)], Action::PageUp),
-        (vec![key(Key::G), key(Key::G)], Action::FirstLine),
-        (vec![shift(Key::G)], Action::LastLine),
-        (vec![key(Key::Num0)], Action::FirstColumn),
-        (vec![shift(Key::Num6)], Action::LineStart),
-        (vec![shift(Key::Num4)], Action::LineEnd),
-        (vec![ctrl(Key::W), key(Key::H)], Action::LeftSide),
-        (vec![ctrl(Key::W), ctrl(Key::H)], Action::LeftSide),
-        (vec![ctrl(Key::W), key(Key::L)], Action::RightSide),
-        (vec![ctrl(Key::W), ctrl(Key::L)], Action::RightSide),
-        (vec![shift(Key::Z), shift(Key::Z)], Action::Close),
-        (vec![save_shortcut()], Action::Save),
-        (vec![reload_shortcut()], Action::Reload),
-        (vec![key(Key::Y)], Action::Yank),
-        (vec![key(Key::V)], Action::StartCharacterSelection),
-        (vec![shift(Key::V)], Action::StartLineSelection),
-        (vec![key(Key::Escape)], Action::CancelSelection),
-        (vec![key(Key::C)], Action::Comment),
-        (
-            vec![key(Key::CloseBracket), key(Key::C)],
-            Action::NextComment,
-        ),
-        (
-            vec![key(Key::OpenBracket), key(Key::C)],
-            Action::PrevComment,
-        ),
-        (vec![key(Key::I)], Action::Insert(InsertAt::BeforeCursor)),
-        (vec![key(Key::A)], Action::Insert(InsertAt::AfterCursor)),
-        (vec![shift(Key::I)], Action::Insert(InsertAt::LineStart)),
-        (vec![shift(Key::A)], Action::Insert(InsertAt::LineEnd)),
-        (vec![shift(Key::O)], Action::OpenLine(OpenLineAt::Above)),
-        (vec![key(Key::O)], Action::OpenLine(OpenLineAt::Below)),
-    ])
+    let letter_key = |c: char| Key::from_name(&c.to_uppercase().to_string()).unwrap();
+    let mark_bindings = ('a'..='z').flat_map(|c| {
+        let set = (vec![key(Key::M), key(letter_key(c))], Action::SetMark(c));
+        let delete = (
+            vec![key(Key::D), key(Key::M), key(letter_key(c))],
+            Action::DeleteMark(c),
+        );
+        [set, delete]
+    });
+    Keymap::new(
+        [
+            (vec![key(Key::P)], Action::PrevChange),
+            (vec![shift(Key::F7)], Action::PrevChange),
+            (vec![key(Key::N)], Action::NextChange),
+            (vec![key(Key::F7)], Action::NextChange),
+            (vec![key(Key::Z), key(Key::B)], Action::CursorBottom),
+            (vec![key(Key::Z), key(Key::T)], Action::CursorTop),
+            (vec![key(Key::Z), key(Key::Z)], Action::CursorCenter),
+            (vec![key(Key::H)], Action::CharLeft),
+            (vec![key(Key::ArrowLeft)], Action::CharLeft),
+            (vec![key(Key::L)], Action::CharRight),
+            (vec![key(Key::ArrowRight)], Action::CharRight),
+            (vec![key(Key::J)], Action::LineDown),
+            (vec![key(Key::ArrowDown)], Action::LineDown),
+            (vec![key(Key::K)], Action::LineUp),
+            (vec![key(Key::ArrowUp)], Action::LineUp),
+            (vec![ctrl(Key::D)], Action::HalfPageDown),
+            (vec![ctrl(Key::U)], Action::HalfPageUp),
+            (vec![ctrl(Key::F)], Action::PageDown),
+            (vec![ctrl(Key::B)], Action::PageUp),
+            (vec![key(Key::G), key(Key::G)], Action::FirstLine),
+            (vec![shift(Key::G)], Action::LastLine),
+            (vec![key(Key::Num0)], Action::FirstColumn),
+            (vec![shift(Key::Num6)], Action::LineStart),
+            (vec![shift(Key::Num4)], Action::LineEnd),
+            (vec![ctrl(Key::W), key(Key::H)], Action::LeftSide),
+            (vec![ctrl(Key::W), ctrl(Key::H)], Action::LeftSide),
+            (vec![ctrl(Key::W), key(Key::L)], Action::RightSide),
+            (vec![ctrl(Key::W), ctrl(Key::L)], Action::RightSide),
+            (vec![shift(Key::Z), shift(Key::Z)], Action::Close),
+            (vec![save_shortcut()], Action::Save),
+            (vec![reload_shortcut()], Action::Reload),
+            (vec![key(Key::Y)], Action::Yank),
+            (vec![key(Key::V)], Action::StartCharacterSelection),
+            (vec![shift(Key::V)], Action::StartLineSelection),
+            (vec![key(Key::Escape)], Action::CancelSelection),
+            (vec![key(Key::C)], Action::Comment),
+            (
+                vec![key(Key::CloseBracket), key(Key::C)],
+                Action::NextComment,
+            ),
+            (
+                vec![key(Key::OpenBracket), key(Key::C)],
+                Action::PrevComment,
+            ),
+            (vec![key(Key::I)], Action::Insert(InsertAt::BeforeCursor)),
+            (vec![key(Key::A)], Action::Insert(InsertAt::AfterCursor)),
+            (vec![shift(Key::I)], Action::Insert(InsertAt::LineStart)),
+            (vec![shift(Key::A)], Action::Insert(InsertAt::LineEnd)),
+            (vec![shift(Key::O)], Action::OpenLine(OpenLineAt::Above)),
+            (vec![key(Key::O)], Action::OpenLine(OpenLineAt::Below)),
+        ]
+        .into_iter()
+        .chain(mark_bindings),
+    )
     .with_counts()
 }
 

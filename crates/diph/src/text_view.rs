@@ -517,6 +517,17 @@ impl TextView {
             Action::NewLine => self.type_text("\n"),
             Action::Tab => self.type_text("\t"),
             Action::Backspace => self.backspace(),
+            Action::SetMark(letter) => {
+                if let Some((side, position)) = self.cursor_position() {
+                    self.set_mark(side, letter, position.line);
+                }
+            }
+            Action::DeleteMark(letter) => {
+                if let Some((side, _)) = self.cursor_position() {
+                    self.marks[side].remove(&letter);
+                    self.rebuild_diff();
+                }
+            }
         }
         None
     }
@@ -3296,6 +3307,49 @@ mod tests {
         let mut view = view_with_mark();
         view.edit(0, |b| b.insert(Position { line: 1, column: 0 }, "\n"));
         assert_eq!(view.marks[1].get(&'a').copied(), Some(2));
+    }
+
+    #[test]
+    fn ma_sets_a_mark_on_the_cursor_line() {
+        let mut harness = Harness::new_ui_state(show_view, unchanged_file());
+        harness.run();
+        press(&mut harness, "j j m a");
+        assert_eq!(harness.state().marks[1].get(&'a').copied(), Some(2));
+    }
+
+    #[test]
+    fn dma_clears_the_mark() {
+        let mut harness = Harness::new_ui_state(show_view, unchanged_file());
+        harness.run();
+        press(&mut harness, "j j m a d m a");
+        assert_eq!(harness.state().marks[1].get(&'a').copied(), None);
+    }
+
+    #[test]
+    fn ma_on_both_sides_anchors_the_diff() {
+        // Left: "foo\n}\nbar\n}\n", right: "bar\n}\nfoo\n}\n".
+        // Without anchor the diff puts "bar\n}" as right-only.
+        // After ma on left line 1 "}" and ma on right line 3 "}", the anchor
+        // forces those lines opposite each other.
+        let left = "foo\n}\nbar\n}\n";
+        let right = "bar\n}\nfoo\n}\n";
+        let diff = SideBySide::new([Buffer::new(left), Buffer::new(right)]);
+        let view = TextView::new(diff, Vec::new());
+        let mut harness = Harness::new_ui_state(show_view, view);
+        harness.run();
+
+        // Set mark on left line 1 ("}").
+        press(&mut harness, "C-w h j m a");
+        // Set mark on right line 3 ("}").
+        press(&mut harness, "C-w l j j j m a");
+
+        let state = harness.state();
+        assert_eq!(state.marks[0].get(&'a').copied(), Some(1));
+        assert_eq!(state.marks[1].get(&'a').copied(), Some(3));
+        // With the anchor the diff should not align the two "}" lines by
+        // global LCS — instead segment 1 ends at the anchored "}".
+        // Row at index 2 should be "}" equal (the anchor line), not LeftOnly.
+        assert_eq!(state.diff.rows()[2].kind, RowKind::Equal);
     }
 
     #[test]
