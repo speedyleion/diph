@@ -221,6 +221,7 @@ impl TextView {
                 .min(self.rows_in_view.saturating_sub(1))
         });
         self.diff = diff;
+        self.diff.realign(&self.anchor_pairs());
         self.cursor_side = self
             .cursor_side
             .filter(|&side| !self.diff.buffers()[side].lines().is_empty())
@@ -524,7 +525,8 @@ impl TextView {
     /// side again. Until the colors arrive, the side's colors move with the
     /// text the edit changed. Returns the change `edit` made.
     fn edit(&mut self, side: usize, edit: impl FnOnce(&mut Buffer) -> Edit) -> Edit {
-        let edit = self.diff.edit(side, edit);
+        let anchors = self.anchor_pairs();
+        let edit = self.diff.edit(side, &anchors, edit);
         self.colors[side].apply(&edit);
         for comment in &mut self.comments {
             comment.range.apply(side, &edit);
@@ -534,9 +536,33 @@ impl TextView {
         edit
     }
 
-    /// Sets the mark `letter` on `side` to `line`.
+    /// Sets the mark `letter` on `side` to `line` and rebuilds the diff.
     pub(crate) fn set_mark(&mut self, side: usize, letter: char, line: usize) {
         self.marks[side].insert(letter, line);
+        self.rebuild_diff();
+    }
+
+    /// Rebuilds the diff rows from the current buffers and marks, keeping
+    /// the buffers' text unchanged.
+    fn rebuild_diff(&mut self) {
+        let anchors = self.anchor_pairs();
+        self.diff.realign(&anchors);
+    }
+
+    /// The anchor pairs derived from marks present on both sides, sorted by
+    /// left-side line.
+    fn anchor_pairs(&self) -> Vec<(usize, usize)> {
+        let [left_marks, right_marks] = &self.marks;
+        let mut pairs: Vec<(usize, usize)> = left_marks
+            .iter()
+            .filter_map(|(letter, &left_line)| {
+                right_marks
+                    .get(letter)
+                    .map(|&right_line| (left_line, right_line))
+            })
+            .collect();
+        pairs.sort_unstable();
+        pairs
     }
 
     /// Moves marks on `side` with the text `edit` changed. A mark whose line
@@ -3270,5 +3296,50 @@ mod tests {
         let mut view = view_with_mark();
         view.edit(0, |b| b.insert(Position { line: 1, column: 0 }, "\n"));
         assert_eq!(view.marks[1].get(&'a').copied(), Some(2));
+    }
+
+    #[test]
+    fn setting_a_mark_rebuilds_the_diff_with_the_anchor() {
+        let mut view = TextView::new(
+            // The first lines on the left side lines up
+            SideBySide::new([Buffer::new("a\nb\nc\na\nb\nc\n"), Buffer::new("a\nb\nc\n")]),
+            Vec::new(),
+        );
+        let changes_before = view.diff.changes().to_vec();
+        view.set_mark(0, 'z', 3);
+        // Only left mark set — no pair yet, diff unchanged from unanchored.
+        assert_eq!(view.diff.changes(), changes_before);
+        assert_eq!(view.diff.rows()[0].kind, RowKind::Equal);
+        assert_eq!(view.diff.rows()[1].kind, RowKind::Equal);
+        assert_eq!(view.diff.rows()[3].kind, RowKind::LeftOnly);
+        assert_eq!(view.diff.rows()[4].kind, RowKind::LeftOnly);
+
+        view.set_mark(1, 'z', 0);
+
+        // Now both marks are set
+        assert_eq!(view.diff.rows()[0].kind, RowKind::Equal);
+        assert_eq!(view.diff.rows()[1].kind, RowKind::LeftOnly);
+        assert_eq!(view.diff.rows()[3].kind, RowKind::LeftOnly);
+        assert_eq!(view.diff.rows()[4].kind, RowKind::Equal);
+    }
+
+    #[test]
+    fn reload_reapplies_marks_to_the_new_diff() {
+        let mut view = TextView::new(
+            SideBySide::new([Buffer::new("a\nb\nc\n"), Buffer::new("x\na\nb\nc\n")]),
+            Vec::new(),
+        );
+        view.marks[0].insert('a', 0);
+        view.marks[1].insert('a', 1);
+        // Reload with new buffers that have different content on the right.
+        // The mark pair (0, 1) should still be applied: left line 0 "a"
+        // anchored opposite right line 1 "a", so right-0 "y" is right-only
+        // and "a" is equal, not the unanchored alignment.
+        view.reload(SideBySide::new([
+            Buffer::new("a\nb\nc\n"),
+            Buffer::new("a\nb\nc\n"),
+        ]));
+        assert_eq!(view.diff.rows()[0].kind, RowKind::Equal);
+        assert_eq!(view.diff.rows()[1].kind, RowKind::RightOnly);
     }
 }

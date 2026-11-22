@@ -95,6 +95,11 @@ impl SideBySide {
         &self.buffers
     }
 
+    /// Consumes `self` and returns its buffers.
+    pub fn into_buffers(self) -> [Buffer; 2] {
+        self.buffers
+    }
+
     pub fn rows(&self) -> &[Row] {
         &self.rows
     }
@@ -107,10 +112,21 @@ impl SideBySide {
     /// Edits the buffer of `side`, 0 for the left and 1 for the right, with
     /// `edit`, then aligns the rows to the edited text. Returns what `edit`
     /// returns.
-    pub fn edit<R>(&mut self, side: usize, edit: impl FnOnce(&mut Buffer) -> R) -> R {
+    pub fn edit<R>(
+        &mut self,
+        side: usize,
+        anchors: &[(usize, usize)],
+        edit: impl FnOnce(&mut Buffer) -> R,
+    ) -> R {
         let edited = edit(&mut self.buffers[side]);
-        *self = Self::new(std::mem::take(&mut self.buffers));
+        *self = Self::with_anchors(std::mem::take(&mut self.buffers), anchors);
         edited
+    }
+
+    /// Rebuilds the diff rows from the current buffers using `anchors`,
+    /// without changing either buffer's text.
+    pub fn realign(&mut self, anchors: &[(usize, usize)]) {
+        *self = Self::with_anchors(std::mem::take(&mut self.buffers), anchors);
     }
 
     /// The index into `rows` of the `line`th line of `side`, 0 for the left
@@ -490,7 +506,7 @@ mod tests {
     fn deleted_lines_put_back() -> SideBySide {
         let mut diff = two_lines_deleted();
         let at = Position { line: 1, column: 0 };
-        diff.edit(1, |buffer| buffer.insert(at, "b\nc\n"));
+        diff.edit(1, &[], |buffer| buffer.insert(at, "b\nc\n"));
         diff
     }
 
@@ -509,7 +525,7 @@ mod tests {
     fn edit_returns_what_the_edit_returns() {
         let mut diff = two_lines_deleted();
         let at = Position { line: 0, column: 1 };
-        let edit = diff.edit(0, |buffer| buffer.insert(at, "!"));
+        let edit = diff.edit(0, &[], |buffer| buffer.insert(at, "!"));
         assert_eq!(edit.inserted_end, BytePosition { line: 0, byte: 2 });
     }
 }
