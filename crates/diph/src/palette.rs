@@ -9,6 +9,10 @@ pub const ONE_SIDED_MARK: Color32 = Color32::from_rgb(0x2f, 0x8f, 0x55);
 pub const CHANGED_MARK: Color32 = Color32::from_rgb(0x3d, 0x6f, 0xc4);
 /// Gutter and change map mark of commented lines.
 pub const COMMENT_MARK: Color32 = Color32::from_rgb(0xd0, 0x9b, 0x3c);
+/// Gutter mark of a paired anchor line (mark present on both sides).
+pub const ANCHOR_MARK: Color32 = Color32::from_rgb(0x2a, 0xb0, 0xb0);
+/// Gutter mark of an unpaired anchor line (mark only on this side).
+pub const UNPAIRED_ANCHOR_MARK: Color32 = Color32::from_rgb(0x2a, 0x70, 0x70);
 
 /// The colors the view paints with.
 #[derive(Clone, Copy)]
