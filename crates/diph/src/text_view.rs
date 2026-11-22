@@ -1,6 +1,6 @@
 //! Side-by-side text diff view.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -25,7 +25,9 @@ use crate::cursor::Cursor;
 use crate::keymap::{
     Action, InsertAt, Keymap, OpenLineAt, comment_keymap, insert_keymap, normal_keymap, pressed_key,
 };
-use crate::palette::{CHANGED_MARK, COMMENT_MARK, ONE_SIDED_MARK, Palette};
+use crate::palette::{
+    ANCHOR_MARK, CHANGED_MARK, COMMENT_MARK, ONE_SIDED_MARK, Palette, UNPAIRED_ANCHOR_MARK,
+};
 use crate::review::ReviewComment;
 use crate::selection::{Selection, SelectionKind, SelectionRange};
 use crate::view_rows::{Gap, ViewRow, ViewRows};
@@ -1039,10 +1041,31 @@ impl TextView {
         }
         let rows = self.diff.rows();
         let comments = &self.comments;
+        let paired: HashSet<char> = self.marks[0]
+            .keys()
+            .filter(|l| self.marks[1].contains_key(l))
+            .copied()
+            .collect();
+        let paired_anchors = self.marks.each_ref().map(|side_marks| {
+            side_marks
+                .iter()
+                .filter(|(l, _)| paired.contains(l))
+                .map(|(_, &line)| line)
+                .collect::<HashSet<usize>>()
+        });
+        let unpaired_anchors = self.marks.each_ref().map(|side_marks| {
+            side_marks
+                .iter()
+                .filter(|(l, _)| !paired.contains(l))
+                .map(|(_, &line)| line)
+                .collect::<HashSet<usize>>()
+        });
         let marks = Marks {
             cursor: self.cursor_position(),
             selection: self.selection,
             comments,
+            paired_anchors: &paired_anchors,
+            unpaired_anchors: &unpaired_anchors,
         };
         let draft = &mut self.draft;
         let mut action = None;
@@ -1308,6 +1331,8 @@ struct HalfLine<'a> {
     active: Option<Position>,
     /// Whether a comment is on the line.
     commented: bool,
+    /// The gutter color for an anchor mark on this line, if any.
+    anchor_mark: Option<Color32>,
 }
 
 /// What a row shows on its lines besides their text.
@@ -1317,6 +1342,10 @@ struct Marks<'a> {
     cursor: Option<(usize, Position)>,
     selection: Option<Selection>,
     comments: &'a [Comment],
+    /// For each side, the lines that have a named mark. Paired marks (present
+    /// on both sides) use [`ANCHOR_MARK`]; unpaired use [`UNPAIRED_ANCHOR_MARK`].
+    paired_anchors: &'a [HashSet<usize>; 2],
+    unpaired_anchors: &'a [HashSet<usize>; 2],
 }
 
 impl RowLayout {
@@ -1336,6 +1365,8 @@ impl RowLayout {
             cursor,
             selection,
             comments,
+            paired_anchors,
+            unpaired_anchors,
         } = marks;
         let size = vec2(ui.available_width(), self.row_height);
         let (rect, response) = ui.allocate_exact_size(size, Sense::CLICK);
@@ -1372,6 +1403,13 @@ impl RowLayout {
                     selection,
                     active,
                     commented: comments.iter().any(|c| c.range.is_on(side, line.index)),
+                    anchor_mark: if paired_anchors[side].contains(&line.index) {
+                        Some(ANCHOR_MARK)
+                    } else if unpaired_anchors[side].contains(&line.index) {
+                        Some(UNPAIRED_ANCHOR_MARK)
+                    } else {
+                        None
+                    },
                 },
             );
             let glyphs = galley.rows.first().map_or(&[][..], |r| &r.glyphs);
@@ -1526,6 +1564,7 @@ impl RowLayout {
             selection,
             active,
             commented,
+            anchor_mark,
         } = half;
         let painter = ui.painter();
         let mid_y = half.center().y;
@@ -1549,6 +1588,11 @@ impl RowLayout {
             let x = half.left()..=half.left() + COMMENT_MARK_WIDTH;
             let mark = Rect::from_x_y_ranges(x, half.y_range()).shrink2(vec2(0.0, 2.0));
             painter.rect_filled(mark, 1.0, COMMENT_MARK);
+        }
+        if let Some(color) = anchor_mark {
+            let x = (gutter_right - COMMENT_MARK_WIDTH * 2.0)..=gutter_right - COMMENT_MARK_WIDTH;
+            let mark = Rect::from_x_y_ranges(x, half.y_range()).shrink2(vec2(0.0, 2.0));
+            painter.rect_filled(mark, 1.0, color);
         }
         let number = (line.index + 1).to_string();
         let pos = pos2(gutter_right - self.char_width, mid_y);
