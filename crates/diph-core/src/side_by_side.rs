@@ -153,10 +153,10 @@ fn segments(
     right_len: usize,
     anchors: &[(usize, usize)],
 ) -> impl Iterator<Item = (Range<usize>, Range<usize>)> + '_ {
-    let starts = std::iter::once((0, 0)).chain(anchors.iter().map(|&(l, r)| (l + 1, r + 1)));
+    let starts = std::iter::once((0, 0)).chain(anchors.iter().map(|&(l, r)| (l, r)));
     let ends = anchors
         .iter()
-        .map(move |&(l, r)| ((l + 1).min(left_len), (r + 1).min(right_len)))
+        .map(move |&(l, r)| (l.min(left_len), r.min(right_len)))
         .chain(std::iter::once((left_len, right_len)));
     starts
         .zip(ends)
