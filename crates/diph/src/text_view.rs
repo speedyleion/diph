@@ -1,5 +1,6 @@
 //! Side-by-side text diff view.
 
+use std::collections::HashMap;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -161,6 +162,9 @@ pub struct TextView {
     theme: Arc<Theme>,
     /// The colors of `theme` the view paints with.
     palette: Palette,
+    /// The named marks on each side's text, as line indices. 0 for the left
+    /// side, 1 for the right.
+    marks: [HashMap<char, usize>; 2],
 }
 
 impl TextView {
@@ -197,6 +201,7 @@ impl TextView {
             highlighting: None,
             palette: Palette::new(&theme),
             theme: Arc::new(theme),
+            marks: Default::default(),
         };
         view.reset_diff_state();
         if !view.diff.changes().is_empty() {
@@ -524,8 +529,41 @@ impl TextView {
         for comment in &mut self.comments {
             comment.range.apply(side, &edit);
         }
+        self.shift_marks(side, &edit);
         self.rehighlight(side);
         edit
+    }
+
+    /// Sets the mark `letter` on `side` to `line`.
+    pub(crate) fn set_mark(&mut self, side: usize, letter: char, line: usize) {
+        self.marks[side].insert(letter, line);
+    }
+
+    /// Returns the marks on each side as `(letter, line)` pairs.
+    pub(crate) fn marks(&self) -> &[HashMap<char, usize>; 2] {
+        &self.marks
+    }
+
+    /// Moves marks on `side` with the text `edit` changed. A mark whose line
+    /// moved goes where it went; a mark on a deleted line goes to the edit's
+    /// start line.
+    fn shift_marks(&mut self, side: usize, edit: &Edit) {
+        let Edit {
+            start,
+            deleted_end,
+            inserted_end,
+        } = *edit;
+        for line in self.marks[side].values_mut() {
+            *line = if *line > deleted_end.line
+                || (*line == deleted_end.line && deleted_end.byte == 0)
+            {
+                *line - deleted_end.line + inserted_end.line
+            } else if *line > start.line {
+                start.line
+            } else {
+                *line
+            };
+        }
     }
 
     /// The saved comments as the review file stores them, with the left
@@ -3171,5 +3209,71 @@ mod tests {
             .collect();
 
         assert_eq!(lines, vec![2]);
+    }
+
+    /// A `TextView` with a mark `'a'` on line 2 of the right side.
+    fn view_with_mark() -> TextView {
+        let mut view = TextView::new(
+            SideBySide::new([
+                Buffer::new("a\nb\nc\nd\ne\n"),
+                Buffer::new("a\nb\nc\nd\ne\n"),
+            ]),
+            Vec::new(),
+        );
+        view.set_mark(1, 'a', 2);
+        view
+    }
+
+    #[yare::parameterized(
+        a_new_line_above_moves_the_mark_down = {
+            Position { line: 1, column: 0 }, "\n", 3
+        },
+        a_new_line_at_the_mark_moves_it_down = {
+            Position { line: 2, column: 0 }, "\n", 3
+        },
+        a_new_line_within_the_marks_line_keeps_it = {
+            Position { line: 2, column: 1 }, "\n", 2
+        },
+        a_new_line_below_the_mark_keeps_it = {
+            Position { line: 3, column: 0 }, "\n", 2
+        },
+    )]
+    fn shift_marks_on_insert(at: Position, text: &str, expected_line: usize) {
+        let mut view = view_with_mark();
+        view.edit(1, |b| b.insert(at, text));
+        assert_eq!(view.marks()[1].get(&'a').copied(), Some(expected_line));
+    }
+
+    #[test]
+    fn shift_marks_deleting_a_line_above_moves_the_mark_up() {
+        // Delete the line break at the end of line 1, joining lines 1 and 2.
+        // The mark is on line 2, which moves up to line 1.
+        let mut view = view_with_mark();
+        view.edit(1, |b| {
+            let end_of_line_1 = Position { line: 1, column: 1 };
+            let start_of_line_2 = Position { line: 2, column: 0 };
+            b.delete(end_of_line_1..start_of_line_2)
+        });
+        assert_eq!(view.marks()[1].get(&'a').copied(), Some(1));
+    }
+
+    #[test]
+    fn shift_marks_deleting_the_marks_line_moves_it_to_the_start_of_the_edit() {
+        // Delete the line break at the end of line 2, joining lines 2 and 3.
+        // The mark is on line 2; the deletion starts on line 2 so it stays.
+        let mut view = view_with_mark();
+        view.edit(1, |b| {
+            let end_of_line_2 = Position { line: 2, column: 1 };
+            let start_of_line_3 = Position { line: 3, column: 0 };
+            b.delete(end_of_line_2..start_of_line_3)
+        });
+        assert_eq!(view.marks()[1].get(&'a').copied(), Some(2));
+    }
+
+    #[test]
+    fn an_edit_on_the_other_side_keeps_the_mark() {
+        let mut view = view_with_mark();
+        view.edit(0, |b| b.insert(Position { line: 1, column: 0 }, "\n"));
+        assert_eq!(view.marks()[1].get(&'a').copied(), Some(2));
     }
 }
