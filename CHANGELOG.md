@@ -9,8 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `do` and `dp` copy the change at the cursor from the other side, or to
-  it, as vim's `:diffget` and `:diffput` do.
+- Copy changes form one side to another.
+- `0` moves the cursor to the first character of the line.
+- Ability to manually align sections.
 
 ## [0.1.6] - 2026-11-18
 
