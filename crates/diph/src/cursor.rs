@@ -65,7 +65,9 @@ impl Cursor {
 
     /// Moves to the first non-whitespace character on the current line.
     pub fn go_to_line_start(&mut self, buffer: &Buffer) {
-        let line = &buffer.lines()[self.line];
+        let Some(line) = buffer.lines().get(self.line) else {
+            return;
+        };
         let column = line
             .chars()
             .position(|character| !character.is_whitespace())
