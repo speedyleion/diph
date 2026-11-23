@@ -8,10 +8,10 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-similar = { version = "3", features = ["unicode"] }
-syntect = "5"
-two-face = "0.5"
+similar = { workspace = true, features = ["unicode"] }
+syntect = { workspace = true }
+two-face = { workspace = true }
 
 [dev-dependencies]
-insta = "1"
-yare = "3"
+insta = { workspace = true }
+yare = { workspace = true }
