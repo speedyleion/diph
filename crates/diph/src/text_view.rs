@@ -494,6 +494,7 @@ impl TextView {
             Action::LineEnd => self.move_cursor(|c, b| c.go_to_line_end(b)),
             Action::LeftSide => self.switch_side(0),
             Action::RightSide => self.switch_side(1),
+            Action::ToggleSide => self.toggle_side(),
             Action::Close => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             Action::Save => return Some(ViewEvent::Save),
             Action::Reload => return Some(ViewEvent::Reload),
@@ -936,6 +937,15 @@ impl TextView {
         }
         self.cursor_side = Some(side);
         self.move_cursor(|c, b| c.go_to_line(b, line));
+    }
+
+    /// Moves the cursor to the other side, toggling between 0 and 1.
+    fn toggle_side(&mut self) {
+        let Some((from, _)) = self.cursor_position() else {
+            return;
+        };
+        let other = 1 - from;
+        self.switch_side(other);
     }
 
     /// Moves the cursor in its buffer with `move_it`, then scrolls the least
@@ -2092,6 +2102,7 @@ mod tests {
         ctrl_w_h_moves_to_the_left_side = { "j l C-w h", 0, 1, 1 },
         ctrl_w_ctrl_h_moves_to_the_left_side = { "C-w C-h", 0, 0, 0 },
         ctrl_w_l_moves_to_the_right_side = { "C-w h j C-w l", 1, 1, 0 },
+        ctrl_w_ctrl_w_toggles_between_sides = { "C-w h C-w C-w", 1, 0, 0 },
         another_key_cancels_a_sequence_and_is_dropped = { "j j g j g", 1, 2, 0 },
         a_new_sequence_starts_after_a_cancelled_one = { "j g j g g", 1, 0, 0 },
         a_count_before_gg_moves_to_its_line = { "1 0 g g", 1, 9, 0 },

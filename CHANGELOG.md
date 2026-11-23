@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Copy changes form one side to another.
 - `0` moves the cursor to the first character of the line.
 - Ability to manually align sections.
+- `ctrl+w ctrl+w` to toggle sides.
 
 ## [0.1.6] - 2026-11-18
 
