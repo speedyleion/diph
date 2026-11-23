@@ -224,6 +224,19 @@ impl TextView {
         });
         self.diff = diff;
         self.diff.realign(&self.anchor_pairs());
+        self.keep_cursor_in_text();
+        self.scroll_to_top_row = self.cursor_position().map(|(side, position)| {
+            self.view_row_of(side, position.line)
+                .saturating_sub(cursor_offset.unwrap_or(CONTEXT_ROWS))
+        });
+        self.reset_diff_state();
+        self.rehighlight(0);
+        self.rehighlight(1);
+    }
+
+    /// Moves the cursor within its side's lines, or to the other side when
+    /// its side has none.
+    fn keep_cursor_in_text(&mut self) {
         self.cursor_side = self
             .cursor_side
             .filter(|&side| !self.diff.buffers()[side].lines().is_empty())
@@ -235,13 +248,6 @@ impl TextView {
         if let Some(side) = self.cursor_side {
             self.cursor.clamp(&self.diff.buffers()[side]);
         }
-        self.scroll_to_top_row = self.cursor_position().map(|(side, position)| {
-            self.view_row_of(side, position.line)
-                .saturating_sub(cursor_offset.unwrap_or(CONTEXT_ROWS))
-        });
-        self.reset_diff_state();
-        self.rehighlight(0);
-        self.rehighlight(1);
     }
 
     fn reset_diff_state(&mut self) {
@@ -530,8 +536,31 @@ impl TextView {
                     self.rebuild_diff();
                 }
             }
+            Action::DiffGet => self.copy_change(false),
+            Action::DiffPut => self.copy_change(true),
         }
         None
+    }
+
+    /// Copies the lines of the change at the cursor, as
+    /// [`SideBySide::change_at`] finds it, from the cursor's side to the
+    /// other when `put`, or from the other side to the cursor's otherwise.
+    fn copy_change(&mut self, put: bool) {
+        let Some((side, position)) = self.cursor_position() else {
+            return;
+        };
+        let Some(lines) = self.diff.change_at(side, position.line) else {
+            return;
+        };
+        let (from, to) = match put {
+            true => (side, 1 - side),
+            false => (1 - side, side),
+        };
+        let copied = self.diff.buffers()[from].lines()[lines[from].clone()].to_vec();
+        self.selection = None;
+        self.edit(to, |b| b.replace_lines(lines[to].clone(), &copied));
+        self.keep_cursor_in_text();
+        self.move_cursor(|_, _| {});
     }
 
     /// Edits the buffer of `side` with `edit` and starts highlighting the
@@ -3436,5 +3465,34 @@ mod tests {
         ]));
         assert_eq!(view.diff.rows()[0].kind, RowKind::RightOnly);
         assert_eq!(view.diff.rows()[1].kind, RowKind::LeftOnly);
+    }
+
+    #[yare::parameterized(
+        do_gets_the_left_lines_into_the_right_side = { "d o", 1, "line 5\n" },
+        dp_puts_the_right_lines_into_the_left_side = { "d p", 0, "line five\n" },
+    )]
+    fn copying_a_change_leaves_the_other_changes(keys: &str, side: usize, line_5: &str) {
+        let mut harness = Harness::new_ui_state(show_view, three_changes());
+        harness.run();
+
+        press(&mut harness, keys);
+
+        let left: String = (0..30).map(|i| format!("line {i}\n")).collect();
+        let edited = left
+            .replace("line 5\n", line_5)
+            .replace("line 15\n", ["line 15\n", "line fifteen\n"][side])
+            .replace("line 25\n", ["line 25\n", "line twenty-five\n"][side]);
+        assert_eq!(harness.state().diff.buffers()[side].text(), edited);
+    }
+
+    #[test]
+    fn getting_a_change_that_empties_both_sides_leaves_no_cursor() {
+        let diff = SideBySide::new([Buffer::new(""), Buffer::new("a\nb\n")]);
+        let mut harness = Harness::new_ui_state(show_view, TextView::new(diff, Vec::new()));
+        harness.run();
+
+        press(&mut harness, "d o ^ j");
+
+        assert_eq!(harness.state().cursor_position(), None);
     }
 }

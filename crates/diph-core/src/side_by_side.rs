@@ -135,6 +135,35 @@ impl SideBySide {
         self.line_rows[side][line]
     }
 
+    /// The left and right lines of the change that `line` of `side` is in,
+    /// or else of the change that starts in the row below it. On the side's
+    /// first line, when neither exists, the change above it instead. `None`
+    /// when no change qualifies.
+    pub fn change_at(&self, side: usize, line: usize) -> Option<[Range<usize>; 2]> {
+        let row = self.row_of(side, line);
+        let above = self.changes.partition_point(|&start| start <= row);
+        let index = match above.checked_sub(1) {
+            Some(index) if self.change_rows(index).contains(&row) => index,
+            _ if self.changes.get(above) == Some(&(row + 1)) => above,
+            Some(index) if line == 0 => index,
+            _ => return None,
+        };
+        let rows = self.change_rows(index);
+        Some([0, 1].map(|side| {
+            let lines = &self.line_rows[side];
+            lines.partition_point(|&r| r < rows.start)..lines.partition_point(|&r| r < rows.end)
+        }))
+    }
+
+    /// The rows of the change at `index` of [`Self::changes`].
+    fn change_rows(&self, index: usize) -> Range<usize> {
+        let start = self.changes[index];
+        let next = self.changes.get(index + 1).copied();
+        let rows = &self.rows[start..next.unwrap_or(self.rows.len())];
+        let len = rows.iter().take_while(|r| r.kind != RowKind::Equal).count();
+        start..start + len
+    }
+
     /// The line of `side` in `row` or above it. When all of the side's lines
     /// are below `row`, its first line instead. `None` when `side` has no
     /// lines.
@@ -389,6 +418,40 @@ mod tests {
     fn a_side_without_lines_has_no_line_at_any_row() {
         let diff = SideBySide::new([Buffer::new(""), Buffer::new("a\n")]);
         assert_eq!(diff.line_at(0, 0), None);
+    }
+
+    /// The diff of "a b c d e f" against a right side with "b" changed and
+    /// "e" deleted, so a two-sided change and a one-sided change.
+    fn two_changes() -> SideBySide {
+        SideBySide::new([
+            Buffer::new("a\nb\nc\nd\ne\nf\n"),
+            Buffer::new("a\nB\nc\nd\nf\n"),
+        ])
+    }
+
+    #[yare::parameterized(
+        a_line_in_a_change_has_that_change = { 1, 1, Some([1..2, 1..2]) },
+        a_line_just_above_a_change_has_it = { 1, 0, Some([1..2, 1..2]) },
+        a_line_just_below_a_change_has_none = { 1, 2, None },
+        a_line_before_deleted_lines_has_them = { 1, 3, Some([4..5, 4..4]) },
+        a_line_after_deleted_lines_has_none = { 1, 4, None },
+        the_other_side_finds_the_same_change = { 0, 4, Some([4..5, 4..4]) },
+    )]
+    fn change_at(side: usize, line: usize, lines: Option<[Range<usize>; 2]>) {
+        assert_eq!(two_changes().change_at(side, line), lines);
+    }
+
+    #[test]
+    fn the_first_line_has_the_change_above_it() {
+        let diff = SideBySide::new([Buffer::new("x\ny\na\nb\n"), Buffer::new("a\nb\n")]);
+        assert_eq!(diff.change_at(1, 0), Some([0..2, 0..0]));
+    }
+
+    #[test]
+    fn a_change_ends_where_an_anchored_change_starts() {
+        let diff =
+            SideBySide::with_anchors([Buffer::new("a\nb\n"), Buffer::new("c\nd\n")], &[(1, 1)]);
+        assert_eq!(diff.change_at(1, 0), Some([0..1, 0..1]));
     }
 
     #[test]

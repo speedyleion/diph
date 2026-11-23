@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `do` and `dp` copy the change at the cursor from the other side, or to
+  it, as vim's `:diffget` and `:diffput` do.
+
 ## [0.1.6] - 2026-11-18
 
 ### Added
