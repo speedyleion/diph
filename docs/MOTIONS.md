@@ -22,6 +22,7 @@
 | `zb` | to the bottom of the view |
 | `Ctrl+w` `h` | to the left side |
 | `Ctrl+w` `l` | to the right side |
+| `Ctrl+w` `Ctrl+w` | to other side |
 
 The view scrolls to keep the cursor in sight. A number typed before a
 command repeats it: `10j` moves down ten lines. The number also picks the

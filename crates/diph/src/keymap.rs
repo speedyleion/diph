@@ -89,6 +89,8 @@ pub(crate) enum Action {
     DiffGet,
     /// Copies the change at the cursor from the cursor's side to the other.
     DiffPut,
+    /// Moves the cursor to the other side, toggling.
+    ToggleSide,
     /// Moves the cursor to the named mark's line and column.
     GoToMark(char),
     /// Moves the cursor to the first non-whitespace character on the named
@@ -166,6 +168,7 @@ pub(crate) fn normal_keymap() -> Keymap<Action> {
             (vec![ctrl(Key::W), ctrl(Key::H)], Action::LeftSide),
             (vec![ctrl(Key::W), key(Key::L)], Action::RightSide),
             (vec![ctrl(Key::W), ctrl(Key::L)], Action::RightSide),
+            (vec![ctrl(Key::W), ctrl(Key::W)], Action::ToggleSide),
             (vec![shift(Key::Z), shift(Key::Z)], Action::Close),
             (vec![save_shortcut()], Action::Save),
             (vec![reload_shortcut()], Action::Reload),
