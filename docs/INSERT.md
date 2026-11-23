@@ -21,4 +21,5 @@ typed into the side.
 | `←` `→` `↑` `↓` | move the cursor |
 | `Escape` | leave insert mode |
 
-Leaving insert mode moves the cursor back over the character to its left, as in vim.
+Leaving insert mode moves the cursor back over the character to its left, as in
+vim.

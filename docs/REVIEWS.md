@@ -6,7 +6,7 @@ While in the comment box the keyboard behaves like in insert mode.
 One can also select multiple lines to create a comment relating to the entire
 selection.
 
-`c` on a line that already has a comment opens that comment to edit. 
+`c` on a line that already has a comment opens that comment to edit.
 
 ## Comment Mode Keybindings
 
@@ -25,4 +25,3 @@ Comments are written to the file named by the `--review` command line argument.
 | `c` | a comment box on the selection, or the cursor's line |
 | `]c` | to the next comment |
 | `[c` | to the previous comment |
-
