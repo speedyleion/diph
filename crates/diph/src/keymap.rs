@@ -81,7 +81,7 @@ pub(crate) enum Action {
     NewLine,
     Tab,
     Backspace,
-    /// Sets the named mark on the cursor's side and line.
+    /// Sets the named mark on the cursor's side and position.
     SetMark(char),
     /// Clears the named mark on the cursor's side.
     DeleteMark(char),
@@ -89,6 +89,11 @@ pub(crate) enum Action {
     DiffGet,
     /// Copies the change at the cursor from the cursor's side to the other.
     DiffPut,
+    /// Moves the cursor to the named mark's line and column.
+    GoToMark(char),
+    /// Moves the cursor to the first non-whitespace character on the named
+    /// mark's line.
+    GoToMarkLine(char),
 }
 
 /// Where insert mode puts the cursor.
@@ -121,7 +126,15 @@ pub(crate) fn normal_keymap() -> Keymap<Action> {
             vec![key(Key::D), key(Key::M), key(letter_key(c))],
             Action::DeleteMark(c),
         );
-        [set, delete]
+        let go_to = (
+            vec![key(Key::Backtick), key(letter_key(c))],
+            Action::GoToMark(c),
+        );
+        let go_to_line = (
+            vec![key(Key::Quote), key(letter_key(c))],
+            Action::GoToMarkLine(c),
+        );
+        [set, delete, go_to, go_to_line]
     });
     Keymap::new(
         [

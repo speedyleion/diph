@@ -164,9 +164,9 @@ pub struct TextView {
     theme: Arc<Theme>,
     /// The colors of `theme` the view paints with.
     palette: Palette,
-    /// The named marks on each side's text, as line indices. 0 for the left
-    /// side, 1 for the right.
-    marks: [HashMap<char, usize>; 2],
+    /// The named marks on each side's text, as buffer positions. 0 for the
+    /// left side, 1 for the right.
+    marks: [HashMap<char, Position>; 2],
 }
 
 impl TextView {
@@ -527,7 +527,7 @@ impl TextView {
             Action::Backspace => self.backspace(),
             Action::SetMark(letter) => {
                 if let Some((side, position)) = self.cursor_position() {
-                    self.set_mark(side, letter, position.line);
+                    self.set_mark(side, letter, position);
                 }
             }
             Action::DeleteMark(letter) => {
@@ -538,6 +538,8 @@ impl TextView {
             }
             Action::DiffGet => self.copy_change(false),
             Action::DiffPut => self.copy_change(true),
+            Action::GoToMark(letter) => self.go_to_mark(letter, false),
+            Action::GoToMarkLine(letter) => self.go_to_mark(letter, true),
         }
         None
     }
@@ -578,9 +580,28 @@ impl TextView {
         edit
     }
 
-    /// Sets the mark `letter` on `side` to `line` and rebuilds the diff.
-    pub(crate) fn set_mark(&mut self, side: usize, letter: char, line: usize) {
-        self.marks[side].insert(letter, line);
+    /// Moves the cursor to the named mark on its side. When `line_start` is
+    /// true, moves to the line's first non-whitespace character; otherwise
+    /// moves to the mark's column.
+    fn go_to_mark(&mut self, letter: char, line_start: bool) {
+        let Some((side, _)) = self.cursor_position() else {
+            return;
+        };
+        let Some(&position) = self.marks[side].get(&letter) else {
+            return;
+        };
+        self.move_cursor(|c, b| match line_start {
+            true => {
+                c.go_to_line(b, position.line);
+                c.go_to_line_start(b);
+            }
+            false => c.set(b, position),
+        });
+    }
+
+    /// Sets the mark `letter` on `side` to `position` and rebuilds the diff.
+    pub(crate) fn set_mark(&mut self, side: usize, letter: char, position: Position) {
+        self.marks[side].insert(letter, position);
         self.rebuild_diff();
     }
 
@@ -597,10 +618,8 @@ impl TextView {
         let [left_marks, right_marks] = &self.marks;
         let mut pairs: Vec<(usize, usize)> = left_marks
             .iter()
-            .filter_map(|(letter, &left_line)| {
-                right_marks
-                    .get(letter)
-                    .map(|&right_line| (left_line, right_line))
+            .filter_map(|(letter, left)| {
+                right_marks.get(letter).map(|right| (left.line, right.line))
             })
             .collect();
         pairs.sort_unstable();
@@ -616,15 +635,18 @@ impl TextView {
             deleted_end,
             inserted_end,
         } = *edit;
-        for line in self.marks[side].values_mut() {
-            *line = if *line > deleted_end.line
-                || (*line == deleted_end.line && deleted_end.byte == 0)
-            {
-                *line - deleted_end.line + inserted_end.line
-            } else if *line > start.line {
-                start.line
-            } else {
-                *line
+        for position in self.marks[side].values_mut() {
+            position.line = match position.line {
+                line if line > deleted_end.line
+                    || (line == deleted_end.line && deleted_end.byte == 0) =>
+                {
+                    line - deleted_end.line + inserted_end.line
+                }
+                line if line > start.line => {
+                    position.column = 0;
+                    start.line
+                }
+                line => line,
             };
         }
     }
@@ -1079,14 +1101,14 @@ impl TextView {
             side_marks
                 .iter()
                 .filter(|(l, _)| paired.contains(l))
-                .map(|(_, &line)| line)
+                .map(|(_, position)| position.line)
                 .collect::<HashSet<usize>>()
         });
         let unpaired_anchors = self.marks.each_ref().map(|side_marks| {
             side_marks
                 .iter()
                 .filter(|(l, _)| !paired.contains(l))
-                .map(|(_, &line)| line)
+                .map(|(_, position)| position.line)
                 .collect::<HashSet<usize>>()
         });
         let marks = Marks {
@@ -2045,6 +2067,8 @@ mod tests {
         let key = match name {
             "$" => Some(Key::Num4),
             "^" => Some(Key::Num6),
+            "'" => Some(Key::Quote),
+            "`" => Some(Key::Backtick),
             _ => Key::from_name(&name.to_uppercase()).or(Key::from_name(name)),
         };
         (ctrl | shift, key.unwrap())
@@ -3325,7 +3349,7 @@ mod tests {
             ]),
             Vec::new(),
         );
-        view.set_mark(1, 'a', 2);
+        view.set_mark(1, 'a', Position { line: 2, column: 0 });
         view
     }
 
@@ -3346,7 +3370,13 @@ mod tests {
     fn shift_marks_on_insert(at: Position, text: &str, expected_line: usize) {
         let mut view = view_with_mark();
         view.edit(1, |b| b.insert(at, text));
-        assert_eq!(view.marks[1].get(&'a').copied(), Some(expected_line));
+        assert_eq!(
+            view.marks[1].get(&'a').copied(),
+            Some(Position {
+                line: expected_line,
+                column: 0
+            })
+        );
     }
 
     #[test]
@@ -3359,7 +3389,10 @@ mod tests {
             let start_of_line_2 = Position { line: 2, column: 0 };
             b.delete(end_of_line_1..start_of_line_2)
         });
-        assert_eq!(view.marks[1].get(&'a').copied(), Some(1));
+        assert_eq!(
+            view.marks[1].get(&'a').copied(),
+            Some(Position { line: 1, column: 0 })
+        );
     }
 
     #[test]
@@ -3372,14 +3405,20 @@ mod tests {
             let start_of_line_3 = Position { line: 3, column: 0 };
             b.delete(end_of_line_2..start_of_line_3)
         });
-        assert_eq!(view.marks[1].get(&'a').copied(), Some(2));
+        assert_eq!(
+            view.marks[1].get(&'a').copied(),
+            Some(Position { line: 2, column: 0 })
+        );
     }
 
     #[test]
     fn an_edit_on_the_other_side_keeps_the_mark() {
         let mut view = view_with_mark();
         view.edit(0, |b| b.insert(Position { line: 1, column: 0 }, "\n"));
-        assert_eq!(view.marks[1].get(&'a').copied(), Some(2));
+        assert_eq!(
+            view.marks[1].get(&'a').copied(),
+            Some(Position { line: 2, column: 0 })
+        );
     }
 
     #[test]
@@ -3387,7 +3426,10 @@ mod tests {
         let mut harness = Harness::new_ui_state(show_view, unchanged_file());
         harness.run();
         press(&mut harness, "j j m a");
-        assert_eq!(harness.state().marks[1].get(&'a').copied(), Some(2));
+        assert_eq!(
+            harness.state().marks[1].get(&'a').copied(),
+            Some(Position { line: 2, column: 0 })
+        );
     }
 
     #[test]
@@ -3417,8 +3459,14 @@ mod tests {
         press(&mut harness, "C-w l j j j m a");
 
         let state = harness.state();
-        assert_eq!(state.marks[0].get(&'a').copied(), Some(1));
-        assert_eq!(state.marks[1].get(&'a').copied(), Some(3));
+        assert_eq!(
+            state.marks[0].get(&'a').copied(),
+            Some(Position { line: 1, column: 0 })
+        );
+        assert_eq!(
+            state.marks[1].get(&'a').copied(),
+            Some(Position { line: 3, column: 0 })
+        );
         // With the anchor the diff should not align the two "}" lines by
         // global LCS — instead segment 1 ends at the anchored "}".
         // Row at index 2 should be "}" equal (the anchor line), not LeftOnly.
@@ -3433,7 +3481,7 @@ mod tests {
             Vec::new(),
         );
         let changes_before = view.diff.changes().to_vec();
-        view.set_mark(0, 'z', 3);
+        view.set_mark(0, 'z', Position { line: 3, column: 0 });
         // Only left mark set — no pair yet, diff unchanged from unanchored.
         assert_eq!(view.diff.changes(), changes_before);
         assert_eq!(view.diff.rows()[0].kind, RowKind::Equal);
@@ -3441,7 +3489,7 @@ mod tests {
         assert_eq!(view.diff.rows()[3].kind, RowKind::LeftOnly);
         assert_eq!(view.diff.rows()[4].kind, RowKind::LeftOnly);
 
-        view.set_mark(1, 'z', 0);
+        view.set_mark(1, 'z', Position { line: 0, column: 0 });
 
         // Now both marks are set
         assert_eq!(view.diff.rows()[0].kind, RowKind::LeftOnly);
@@ -3456,8 +3504,8 @@ mod tests {
             SideBySide::new([Buffer::new("a\nb\nc\n"), Buffer::new("x\na\nb\nc\n")]),
             Vec::new(),
         );
-        view.marks[0].insert('a', 0);
-        view.marks[1].insert('a', 1);
+        view.marks[0].insert('a', Position { line: 0, column: 0 });
+        view.marks[1].insert('a', Position { line: 1, column: 0 });
 
         view.reload(SideBySide::new([
             Buffer::new("a\nb\nc\n"),
@@ -3494,5 +3542,59 @@ mod tests {
         press(&mut harness, "d o ^ j");
 
         assert_eq!(harness.state().cursor_position(), None);
+    }
+
+    #[yare::parameterized(
+        backtick_moves_to_the_marks_column = { "` a", Position { line: 1, column: 5 } },
+        quote_moves_to_the_first_non_whitespace_character = { "' a", Position { line: 1, column: 2 } },
+    )]
+    fn mark_motion_moves_the_cursor(keys: &str, expected: Position) {
+        let text = "first line\n  second line\nthird line\n";
+        let diff = SideBySide::new([Buffer::new(text), Buffer::new(text)]);
+        let view = TextView::new(diff, Vec::new());
+        let mut harness = Harness::new_ui_state(show_view, view);
+        harness.run();
+        press(&mut harness, "j 5 l m a g g");
+        press(&mut harness, keys);
+        assert_eq!(harness.state().cursor_position(), Some((1, expected)));
+    }
+
+    #[test]
+    fn character_selection_extends_to_a_mark() {
+        let text = "first line\n  second line\nthird line\n";
+        let diff = SideBySide::new([Buffer::new(text), Buffer::new(text)]);
+        let view = TextView::new(diff, Vec::new());
+        let mut harness = Harness::new_ui_state(show_view, view);
+        harness.run();
+        press(&mut harness, "j 5 l m a g g v ` a");
+        assert_eq!(
+            harness.state().cursor_position(),
+            Some((1, Position { line: 1, column: 5 }))
+        );
+    }
+
+    #[test]
+    fn moving_to_an_unset_mark_keeps_the_cursor() {
+        let mut harness = Harness::new_ui_state(show_view, unchanged_file());
+        harness.run();
+        press(&mut harness, "j j ' a");
+        assert_eq!(
+            harness.state().cursor_position(),
+            Some((1, Position { line: 2, column: 0 }))
+        );
+    }
+
+    #[test]
+    fn moving_to_a_mark_on_the_other_side_keeps_the_cursor() {
+        let text = "a\nb\nc\n";
+        let diff = SideBySide::new([Buffer::new(text), Buffer::new(text)]);
+        let view = TextView::new(diff, Vec::new());
+        let mut harness = Harness::new_ui_state(show_view, view);
+        harness.run();
+        press(&mut harness, "C-w h j m a C-w l g g ` a");
+        assert_eq!(
+            harness.state().cursor_position(),
+            Some((1, Position { line: 0, column: 0 }))
+        );
     }
 }
