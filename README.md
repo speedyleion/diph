@@ -15,8 +15,14 @@ to show a file's path in the repository instead of git's temporary file.
 
 ## Keyboard commands
 
-The full list of keys, grouped by the mode they act in, is in
-[docs/KEYBOARD.md](docs/KEYBOARD.md).
+The full list of keys, grouped by mode, is in
+[docs/MOTIONS.md](docs/MOTIONS.md),
+[docs/CHANGES.md](docs/CHANGES.md),
+[docs/SELECTIONS.md](docs/SELECTIONS.md),
+[docs/REVIEWS.md](docs/REVIEWS.md),
+[docs/MARKS.md](docs/MARKS.md),
+[docs/INSERT.md](docs/INSERT.md),
+and [docs/FILES.md](docs/FILES.md).
 
 ## Review comments
 
