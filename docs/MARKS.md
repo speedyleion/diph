@@ -10,6 +10,5 @@ The gutter will provide an indicator that there is a mark on the line.
 | --- | --- |
 | `m` + letter | Set a mark on the cursor's side and position |
 | `d` `m` + letter | Delete the named mark on the cursor's side |
-| `` ` `` + letter | Move the cursor to the mark's position |
-| `'` + letter | Move the cursor to the mark's line's first non-blank character |
-
+| `` ` `` + letter | Move to the mark's position |
+| `'` + letter | Move to the mark's line's first non-blank character |
