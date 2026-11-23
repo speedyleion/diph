@@ -55,11 +55,11 @@ impl Buffer {
 
     /// The buffer's text, with each line ending in the line ending of the
     /// text's first line, and the last line ending in one if the text's
-    /// last line did.
+    /// last line did. Empty when the buffer has no lines.
     pub fn text(&self) -> String {
         let line_ending = if self.crlf { "\r\n" } else { "\n" };
         let mut text = self.lines.join(line_ending);
-        if self.ends_with_line_ending {
+        if self.ends_with_line_ending && !self.lines.is_empty() {
             text.push_str(line_ending);
         }
         text
@@ -120,6 +120,30 @@ impl Buffer {
         Edit {
             deleted_end: end,
             ..unchanged
+        }
+    }
+
+    /// Replaces the lines in `lines`, which must be in the buffer or end at
+    /// its end, with `replacement`. The change starts and ends at the start
+    /// of a line, which past the last line is the line after it.
+    pub fn replace_lines(&mut self, lines: Range<usize>, replacement: &[String]) -> Edit {
+        let start = BytePosition {
+            line: lines.start,
+            byte: 0,
+        };
+        let deleted_end = BytePosition {
+            line: lines.end,
+            byte: 0,
+        };
+        let inserted_end = BytePosition {
+            line: lines.start + replacement.len(),
+            byte: 0,
+        };
+        self.lines.splice(lines, replacement.iter().cloned());
+        Edit {
+            start,
+            deleted_end,
+            inserted_end,
         }
     }
 
@@ -247,6 +271,34 @@ mod tests {
                 start,
                 deleted_end,
                 inserted_end
+            }
+        );
+    }
+
+    #[yare::parameterized(
+        in_the_middle = { "a\nb\nc\n", 1..2, &["x", "y"], "a\nx\ny\nc\n" },
+        none_inserts_before_a_line = { "a\nb\n", 1..1, &["x"], "a\nx\nb\n" },
+        none_at_the_end_appends = { "a\nb\n", 2..2, &["x"], "a\nb\nx\n" },
+        with_none_removes_them = { "a\nb\nc\n", 0..2, &[], "c\n" },
+        all_with_none_leaves_no_text = { "a\nb\n", 0..2, &[], "" },
+    )]
+    fn replace_lines(text: &str, lines: Range<usize>, replacement: &[&str], replaced: &str) {
+        let mut buffer = Buffer::new(text);
+        let replacement: Vec<_> = replacement.iter().map(|l| l.to_string()).collect();
+        buffer.replace_lines(lines, &replacement);
+        assert_eq!(buffer.text(), replaced);
+    }
+
+    #[test]
+    fn replace_lines_reports_the_change_in_whole_lines() {
+        let mut buffer = Buffer::new("a\nb\nc\n");
+        let edit = buffer.replace_lines(1..3, &["x".to_owned()]);
+        assert_eq!(
+            edit,
+            Edit {
+                start: BytePosition { line: 1, byte: 0 },
+                deleted_end: BytePosition { line: 3, byte: 0 },
+                inserted_end: BytePosition { line: 2, byte: 0 },
             }
         );
     }

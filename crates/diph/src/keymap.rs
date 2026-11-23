@@ -85,6 +85,10 @@ pub(crate) enum Action {
     SetMark(char),
     /// Clears the named mark on the cursor's side.
     DeleteMark(char),
+    /// Copies the change at the cursor from the other side to the cursor's.
+    DiffGet,
+    /// Copies the change at the cursor from the cursor's side to the other.
+    DiffPut,
 }
 
 /// Where insert mode puts the cursor.
@@ -171,6 +175,8 @@ pub(crate) fn normal_keymap() -> Keymap<Action> {
             (vec![shift(Key::A)], Action::Insert(InsertAt::LineEnd)),
             (vec![shift(Key::O)], Action::OpenLine(OpenLineAt::Above)),
             (vec![key(Key::O)], Action::OpenLine(OpenLineAt::Below)),
+            (vec![key(Key::D), key(Key::O)], Action::DiffGet),
+            (vec![key(Key::D), key(Key::P)], Action::DiffPut),
         ]
         .into_iter()
         .chain(mark_bindings),
