@@ -1027,8 +1027,10 @@ impl TextView {
                 // one-sided change on the other side), line_at returns the
                 // equal row before the change, so cursor_row is already
                 // before the change we're on. Skip it rather than re-jumping.
+                // Only skip when the cursor is on the equal row immediately
+                // before the change.
                 match first {
-                    Some(i) if self.current_change == Some(i) => {
+                    Some(i) if self.current_change == Some(i) && cursor_row + 1 == changes[i] => {
                         (i + 1 < changes.len()).then_some(i + 1)
                     }
                     other => other,
@@ -2060,6 +2062,23 @@ mod tests {
         view.step_change(1);
 
         assert_eq!(view.current_change, Some(expected_next));
+    }
+
+    #[test]
+    fn next_change_jumps_to_the_change_after_moving_the_cursor_before_it() {
+        let mut view = TextView::new(
+            SideBySide::new([
+                Buffer::new("before\nchanged\nafter\n"),
+                Buffer::new("before\nreplaced\nafter\n"),
+            ]),
+            Vec::new(),
+        );
+        view.cursor
+            .set(&view.diff.buffers()[1], Position { line: 0, column: 0 });
+
+        view.step_change(1);
+
+        assert_eq!(view.current_change, Some(0));
     }
 
     /// The view of 200 equal lines, after pressing `keys` one per frame.
