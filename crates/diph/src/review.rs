@@ -124,9 +124,7 @@ pub(crate) fn save(
 
 fn read(file: &Path) -> anyhow::Result<ReviewFile> {
     match std::fs::read_to_string(file) {
-        Ok(text) => {
-            toml::from_str(&text).with_context(|| format!("reading {}", file.display()))
-        }
+        Ok(text) => toml::from_str(&text).with_context(|| format!("reading {}", file.display())),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(ReviewFile {
             version: 1,
             comments: Vec::new(),
@@ -185,9 +183,8 @@ mod tests {
 
         let serialized = toml::to_string_pretty(&review).unwrap();
 
-        let expected = format!(
-            "version = 1\n\n[[comments]]\npath = \"a.rs\"\nside = \"right\"\n{positions}"
-        );
+        let expected =
+            format!("version = 1\n\n[[comments]]\npath = \"a.rs\"\nside = \"right\"\n{positions}");
         assert_eq!(serialized, expected);
     }
 
