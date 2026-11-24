@@ -1021,7 +1021,19 @@ impl TextView {
         let cursor_row = self.diff.row_of(side, position.line);
         let changes = self.diff.changes();
         let next = match delta > 0 {
-            true => changes.iter().position(|&row| row > cursor_row),
+            true => {
+                let first = changes.iter().position(|&row| row > cursor_row);
+                // When the cursor side has no line at the change's row (a
+                // one-sided change on the other side), line_at returns the
+                // equal row before the change, so cursor_row is already
+                // before the change we're on. Skip it rather than re-jumping.
+                match first {
+                    Some(i) if self.current_change == Some(i) => {
+                        (i + 1 < changes.len()).then_some(i + 1)
+                    }
+                    other => other,
+                }
+            }
             false => match self.diff.rows()[cursor_row].kind {
                 RowKind::Equal => changes
                     .partition_point(|&row| row < cursor_row)
@@ -2014,6 +2026,40 @@ mod tests {
             view.cursor.position(&view.diff.buffers()[side]).line,
             expected_line
         );
+    }
+
+    #[yare::parameterized(
+        a_deletion_on_the_left = {
+            "a\ndeleted\nb\nc\n",
+            "a\nb\nchanged\n",
+            1,
+            1,
+        },
+        a_deletion_on_the_right = {
+            "a\nb\nchanged\n",
+            "a\ndeleted\nb\nc\n",
+            0,
+            1,
+        },
+    )]
+    fn next_change_advances_past_a_one_sided_change(
+        left: &str,
+        right: &str,
+        side: usize,
+        expected_next: usize,
+    ) {
+        // The view opens at the first change (a deletion on the other side),
+        // placing the cursor on the equal line before it. Pressing n should
+        // advance to the next change, not re-jump to the same one.
+        let mut view = TextView::new(
+            SideBySide::new([Buffer::new(left), Buffer::new(right)]),
+            Vec::new(),
+        );
+        view.cursor_side = Some(side);
+
+        view.step_change(1);
+
+        assert_eq!(view.current_change, Some(expected_next));
     }
 
     /// The view of 200 equal lines, after pressing `keys` one per frame.
