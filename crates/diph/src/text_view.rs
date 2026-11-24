@@ -1030,10 +1030,7 @@ impl TextView {
                 // Only skip when the cursor is on the equal row immediately
                 // before the change.
                 match first {
-                    Some(i)
-                        if self.current_change == Some(i)
-                            && cursor_row + 1 == changes[i] =>
-                    {
+                    Some(i) if self.current_change == Some(i) && cursor_row + 1 == changes[i] => {
                         (i + 1 < changes.len()).then_some(i + 1)
                     }
                     other => other,
@@ -2076,13 +2073,8 @@ mod tests {
             ]),
             Vec::new(),
         );
-        view.cursor.set(
-            &view.diff.buffers()[1],
-            Position {
-                line: 0,
-                column: 0,
-            },
-        );
+        view.cursor
+            .set(&view.diff.buffers()[1], Position { line: 0, column: 0 });
 
         view.step_change(1);
 
