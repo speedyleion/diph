@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-11-23
+
+### Changed
+
+- Use toml for the review file format
+
+### Fixed
+
+- `n` not moving to the next diff/change when encountering a deleted section.
+
 ## [0.1.7] - 2026-11-22
 
 ### Added
@@ -91,7 +101,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Initial release
 
-[unreleased]: https://github.com/speedyleion/gh-difftool/releases/tag/v0.1.7...HEAD
+[unreleased]: https://github.com/speedyleion/gh-difftool/releases/tag/v0.1.8...HEAD
+[0.1.8]: https://github.com/speedyleion/gh-difftool/releases/tag/v0.1.8
 [0.1.7]: https://github.com/speedyleion/gh-difftool/releases/tag/v0.1.7
 [0.1.6]: https://github.com/speedyleion/gh-difftool/releases/tag/v0.1.6
 [0.1.5]: https://github.com/speedyleion/gh-difftool/releases/tag/v0.1.5
