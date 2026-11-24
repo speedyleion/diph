@@ -10,9 +10,9 @@ use crate::comment::{Comment, CommentRange};
 use crate::selection::{SelectionKind, SelectionRange};
 
 #[derive(Serialize, Deserialize)]
-struct ReviewFile {
-    version: u32,
-    comments: Vec<ReviewComment>,
+pub(crate) struct ReviewFile {
+    pub(crate) version: u32,
+    pub(crate) comments: Vec<ReviewComment>,
 }
 
 /// A comment as the review file stores it.
@@ -118,14 +118,14 @@ pub(crate) fn save(
         .comments
         .retain(|comment| !paths.contains(&comment.path.as_path()));
     review.comments.extend(comments);
-    let json = serde_json::to_string_pretty(&review)? + "\n";
-    std::fs::write(file, json).with_context(|| format!("writing {}", file.display()))
+    let text = toml::to_string_pretty(&review)? + "\n";
+    std::fs::write(file, text).with_context(|| format!("writing {}", file.display()))
 }
 
 fn read(file: &Path) -> anyhow::Result<ReviewFile> {
-    match std::fs::read(file) {
-        Ok(bytes) => {
-            serde_json::from_slice(&bytes).with_context(|| format!("reading {}", file.display()))
+    match std::fs::read_to_string(file) {
+        Ok(text) => {
+            toml::from_str(&text).with_context(|| format!("reading {}", file.display()))
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(ReviewFile {
             version: 1,
@@ -140,9 +140,8 @@ mod tests {
     use std::path::Path;
 
     use diph_core::Position;
-    use serde_json::json;
 
-    use super::{ReviewComment, load, save};
+    use super::{ReviewComment, ReviewFile, load, save};
     use crate::comment::{Comment, CommentRange};
     use crate::selection::{SelectionKind, SelectionRange};
 
@@ -168,34 +167,34 @@ mod tests {
 
     #[yare::parameterized(
         a_line_comment_leaves_out_columns = {
-            SelectionKind::Line, json!({ "line": 3 }), json!({ "line": 4 })
+            SelectionKind::Line,
+            "quote = \"text\"\nbody = \"body\"\n\n[comments.start]\nline = 3\n\n[comments.end]\nline = 4\n",
         },
         a_character_comment_counts_columns_from_1 = {
             SelectionKind::Character,
-            json!({ "line": 3, "column": 5 }),
-            json!({ "line": 4, "column": 1 })
+            "quote = \"text\"\nbody = \"body\"\n\n[comments.start]\nline = 3\ncolumn = 5\n\n[comments.end]\nline = 4\ncolumn = 1\n",
         },
     )]
-    fn review_comment_json(kind: SelectionKind, start: serde_json::Value, end: serde_json::Value) {
+    fn review_comment_toml(kind: SelectionKind, positions: &str) {
         let comment = comment(kind, "body");
-
         let review_comment = ReviewComment::new(&comment, Path::new("a.rs"), "text".to_owned());
+        let review = ReviewFile {
+            version: 1,
+            comments: vec![review_comment],
+        };
 
-        let expected = json!({
-            "path": "a.rs",
-            "side": "right",
-            "start": start,
-            "end": end,
-            "quote": "text",
-            "body": "body",
-        });
-        assert_eq!(serde_json::to_value(review_comment).unwrap(), expected);
+        let serialized = toml::to_string_pretty(&review).unwrap();
+
+        let expected = format!(
+            "version = 1\n\n[[comments]]\npath = \"a.rs\"\nside = \"right\"\n{positions}"
+        );
+        assert_eq!(serialized, expected);
     }
 
     #[test]
     fn saving_replaces_the_comments_for_the_diff_and_keeps_the_rest() {
         let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("review.json");
+        let file = dir.path().join("review.toml");
         let kept = vec![review_comment("other.rs", "kept")];
         save(&file, [Path::new("other.rs"); 2], kept).unwrap();
         save(
@@ -212,15 +211,9 @@ mod tests {
         )
         .unwrap();
 
-        let saved: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
-        let bodies: Vec<_> = saved["comments"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|comment| comment["body"].as_str().unwrap())
-            .collect();
-        assert_eq!(saved["version"].as_u64(), Some(1));
+        let saved: ReviewFile = toml::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+        let bodies: Vec<_> = saved.comments.iter().map(|c| c.body.as_str()).collect();
+        assert_eq!(saved.version, 1);
         assert_eq!(bodies, vec!["kept", "new"]);
     }
 
@@ -230,7 +223,7 @@ mod tests {
     )]
     fn loading_reads_back_saved_comments(kind: SelectionKind, start_column: usize) {
         let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("review.json");
+        let file = dir.path().join("review.toml");
         let mut comment = comment(kind, "body");
         comment.range.range.start.column = start_column;
         let review_comment = ReviewComment::new(&comment, Path::new("a.rs"), "text".to_owned());
@@ -248,7 +241,7 @@ mod tests {
     )]
     fn loading_keeps_comments_on_their_sides_path(paths: [&str; 2], loaded: usize) {
         let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("review.json");
+        let file = dir.path().join("review.toml");
         let comments = vec![review_comment("new.rs", "body")];
         save(&file, [Path::new("new.rs"); 2], comments).unwrap();
 

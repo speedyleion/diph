@@ -78,6 +78,11 @@ crate descriptions, and `--help` text: describe what the code does now.
   meaningful steps, or its name clarifies a domain rule that isn't already
   clear from the expression.
 
+## Shell commands
+
+- Run all commands from the workspace root.
+  Use the `cwd` parameter instead of `cd`.
+
 ## Tests
 
 - Give each test one arrange, act, and assert. When another case needs

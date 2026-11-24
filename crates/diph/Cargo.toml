@@ -14,7 +14,7 @@ diph-core = { workspace = true }
 eframe = { workspace = true, features = ["persistence"] }
 itertools = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
-serde_json = { workspace = true }
+toml = { workspace = true }
 winit = { workspace = true }
 
 [dev-dependencies]
