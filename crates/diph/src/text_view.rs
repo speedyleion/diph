@@ -3245,16 +3245,13 @@ mod tests {
         let paths = [Path::new("old.rs"), Path::new("new.rs")];
         let comments = harness.state().review_comments(paths);
 
-        let json = serde_json::to_value(comments).unwrap();
-        let expected = serde_json::json!([{
-            "path": "new.rs",
-            "side": "right",
-            "start": { "line": 2 },
-            "end": { "line": 3 },
-            "quote": "line 1\nline 2\n",
-            "body": "x",
-        }]);
-        assert_eq!(json, expected);
+        let review = crate::review::ReviewFile {
+            version: 1,
+            comments,
+        };
+        let serialized = toml::to_string_pretty(&review).unwrap();
+        let expected = "version = 1\n\n[[comments]]\npath = \"new.rs\"\nside = \"right\"\nquote = \"\"\"\nline 1\nline 2\n\"\"\"\nbody = \"x\"\n\n[comments.start]\nline = 2\n\n[comments.end]\nline = 3\n";
+        assert_eq!(serialized, expected);
     }
 
     #[test]
