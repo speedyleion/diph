@@ -1,5 +1,5 @@
 //! Word boundaries, word motions, and word text objects.
-#![allow(unused)]
+
 use std::iter;
 use std::ops::Range;
 
@@ -26,6 +26,7 @@ pub(crate) fn char_kind(c: char) -> CharKind {
 
 /// The character column range of the word or whitespace span under `column`
 /// on `line`. None when `column` is past the line's characters.
+#[allow(dead_code)]
 pub(crate) fn inner_word_range(line: &str, column: usize) -> Option<Range<usize>> {
     let chars: Vec<char> = line.chars().collect();
     let (first, second) = chars.split_at_checked(column)?;
@@ -45,6 +46,7 @@ pub(crate) fn inner_word_range(line: &str, column: usize) -> Option<Range<usize>
 /// its trailing whitespace, or leading whitespace if there is no trailing
 /// whitespace on the line. When `column` is on whitespace, includes the word
 /// following it. None when `column` is past the line's characters.
+#[allow(dead_code)]
 pub(crate) fn a_word_range(line: &str, column: usize) -> Option<Range<usize>> {
     let chars: Vec<char> = line.chars().collect();
     let inner = inner_word_range(line, column)?;
