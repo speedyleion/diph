@@ -2,6 +2,8 @@
 
 use diph_core::{Buffer, Position};
 
+use crate::word::{find_word_backward, find_word_end, find_word_forward};
+
 /// A cursor on a character of a buffer, which each call names. It keeps
 /// its column across lines too short to reach it. In a buffer without
 /// lines it stays at the start.
@@ -90,6 +92,24 @@ impl Cursor {
                 column: usize::MAX,
             },
         );
+    }
+
+    /// Moves forward `count` word starts in `buffer`.
+    pub fn move_word_forward(&mut self, buffer: &Buffer, count: usize) {
+        let dest = find_word_forward(buffer, self.position(buffer), count);
+        self.set(buffer, dest);
+    }
+
+    /// Moves backward `count` word starts in `buffer`.
+    pub fn move_word_backward(&mut self, buffer: &Buffer, count: usize) {
+        let dest = find_word_backward(buffer, self.position(buffer), count);
+        self.set(buffer, dest);
+    }
+
+    /// Moves forward to the end of `count` words in `buffer`.
+    pub fn move_word_end(&mut self, buffer: &Buffer, count: usize) {
+        let dest = find_word_end(buffer, self.position(buffer), count);
+        self.set(buffer, dest);
     }
 
     /// The last column the cursor can take on its line in `buffer`.
@@ -209,5 +229,44 @@ mod tests {
         cursor.move_column(&buffer, 1);
         cursor.set_between_characters(&buffer, false);
         assert_eq!(cursor.position(&buffer).column, 4);
+    }
+
+    #[yare::parameterized(
+        empty_buffer = { "", Position { line: 0, column: 0 }, 1, Position { line: 0, column: 0 } },
+        count_zero = { "one two", Position { line: 0, column: 0 }, 0, Position { line: 0, column: 0 } },
+        next_word = { "one two three", Position { line: 0, column: 0 }, 1, Position { line: 0, column: 4 } },
+        across_lines_with_count = { "one\ntwo three", Position { line: 0, column: 0 }, 2, Position { line: 1, column: 4 } },
+        past_end = { "one two", Position { line: 0, column: 0 }, 9, Position { line: 0, column: 6 } },
+    )]
+    fn move_word_forward(text: &str, start: Position, count: usize, expected: Position) {
+        let (mut cursor, buffer) = cursor_at(text, start);
+        cursor.move_word_forward(&buffer, count);
+        assert_eq!(cursor.position(&buffer), expected);
+    }
+
+    #[yare::parameterized(
+        empty_buffer = { "", Position { line: 0, column: 0 }, 1, Position { line: 0, column: 0 } },
+        count_zero = { "one two", Position { line: 0, column: 4 }, 0, Position { line: 0, column: 4 } },
+        prev_word = { "one two three", Position { line: 0, column: 8 }, 1, Position { line: 0, column: 4 } },
+        across_lines_with_count = { "one\ntwo three", Position { line: 1, column: 4 }, 2, Position { line: 0, column: 0 } },
+        past_start = { "one two", Position { line: 0, column: 4 }, 9, Position { line: 0, column: 0 } },
+    )]
+    fn move_word_backward(text: &str, start: Position, count: usize, expected: Position) {
+        let (mut cursor, buffer) = cursor_at(text, start);
+        cursor.move_word_backward(&buffer, count);
+        assert_eq!(cursor.position(&buffer), expected);
+    }
+
+    #[yare::parameterized(
+        empty_buffer = { "", Position { line: 0, column: 0 }, 1, Position { line: 0, column: 0 } },
+        count_zero = { "one two", Position { line: 0, column: 0 }, 0, Position { line: 0, column: 0 } },
+        word_end = { "one two three", Position { line: 0, column: 0 }, 1, Position { line: 0, column: 2 } },
+        across_lines_with_count = { "one\ntwo three", Position { line: 0, column: 0 }, 2, Position { line: 1, column: 2 } },
+        past_end = { "one two", Position { line: 0, column: 0 }, 9, Position { line: 0, column: 6 } },
+    )]
+    fn move_word_end(text: &str, start: Position, count: usize, expected: Position) {
+        let (mut cursor, buffer) = cursor_at(text, start);
+        cursor.move_word_end(&buffer, count);
+        assert_eq!(cursor.position(&buffer), expected);
     }
 }

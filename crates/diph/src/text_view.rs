@@ -492,6 +492,13 @@ impl TextView {
             Action::FirstColumn => self.move_cursor(|c, b| c.move_column(b, isize::MIN)),
             Action::LineStart => self.move_cursor(|c, b| c.go_to_line_start(b)),
             Action::LineEnd => self.move_cursor(|c, b| c.go_to_line_end(b)),
+            Action::WordForward => {
+                self.move_cursor(|c, b| c.move_word_forward(b, count.max(0) as usize))
+            }
+            Action::WordBackward => {
+                self.move_cursor(|c, b| c.move_word_backward(b, count.max(0) as usize))
+            }
+            Action::WordEnd => self.move_cursor(|c, b| c.move_word_end(b, count.max(0) as usize)),
             Action::LeftSide => self.switch_side(0),
             Action::RightSide => self.switch_side(1),
             Action::ToggleSide => self.toggle_side(),
@@ -2164,6 +2171,13 @@ mod tests {
         zero_moves_to_the_first_column = { "l l l 0", 1, 0, 0 },
         caret_moves_to_the_start_of_the_line = { "^", 1, 0, 0 },
         dollar_moves_to_the_end_of_the_line = { "$", 1, 0, 5 },
+        w_moves_to_the_next_word = { "w", 1, 0, 5 },
+        w_moves_across_lines = { "w w", 1, 1, 0 },
+        a_count_before_w_moves_forward = { "3 w", 1, 1, 5 },
+        b_moves_to_the_previous_word = { "j w b", 1, 1, 0 },
+        a_count_before_b_moves_backward = { "3 w 2 b", 1, 0, 5 },
+        e_moves_to_the_word_end = { "e", 1, 0, 3 },
+        a_count_before_e_moves_to_word_end = { "2 e", 1, 0, 5 },
         ctrl_w_h_moves_to_the_left_side = { "j l C-w h", 0, 1, 1 },
         ctrl_w_ctrl_h_moves_to_the_left_side = { "C-w C-h", 0, 0, 0 },
         ctrl_w_l_moves_to_the_right_side = { "C-w h j C-w l", 1, 1, 0 },
