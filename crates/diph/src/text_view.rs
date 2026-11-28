@@ -23,7 +23,8 @@ use itertools::{
 use crate::comment::{Comment, CommentRange};
 use crate::cursor::Cursor;
 use crate::keymap::{
-    Action, InsertAt, Keymap, OpenLineAt, comment_keymap, insert_keymap, normal_keymap, pressed_key,
+    Action, InsertAt, Keymap, OpenLineAt, Operator, Target, comment_keymap, insert_keymap,
+    normal_keymap, operator_keymap, pressed_key,
 };
 use crate::palette::{
     ANCHOR_MARK, CHANGED_MARK, COMMENT_MARK, ONE_SIDED_MARK, Palette, UNPAIRED_ANCHOR_MARK,
@@ -59,12 +60,16 @@ struct ColorsChunk {
 }
 
 /// Which keymap keys go to, as in vim.
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Mode {
     Normal,
     Insert,
     /// Writing a comment, whose box takes the typed text.
     Comment,
+    OperatorPending {
+        operator: Operator,
+        count: Option<usize>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -146,6 +151,7 @@ pub struct TextView {
     normal_keys: Keymap<Action>,
     insert_keys: Keymap<Action>,
     comment_keys: Keymap<Action>,
+    operator_keys: Keymap<Action>,
     /// Syntax colors of the left and right side, filled in from the top as
     /// the background highlighter delivers them.
     colors: [SideColors; 2],
@@ -196,6 +202,7 @@ impl TextView {
             normal_keys: normal_keymap(),
             insert_keys: insert_keymap(),
             comment_keys: comment_keymap(),
+            operator_keys: operator_keymap(),
             colors: Default::default(),
             colors_rx: None,
             highlight_runs: Default::default(),
@@ -262,6 +269,7 @@ impl TextView {
         self.normal_keys.clear();
         self.insert_keys.clear();
         self.comment_keys.clear();
+        self.operator_keys.clear();
         self.colors = Default::default();
         self.colors_received = [0; 2];
     }
@@ -314,7 +322,7 @@ impl TextView {
     /// What the status bar shows for the mode, if anything.
     pub(crate) fn mode_label(&self) -> Option<&'static str> {
         match self.mode {
-            Mode::Normal => None,
+            Mode::Normal | Mode::OperatorPending { .. } => None,
             Mode::Insert => Some("-- INSERT --"),
             Mode::Comment => Some("-- COMMENT --"),
         }
@@ -425,15 +433,23 @@ impl TextView {
     /// text that a bound key did not type. Takes the text a bound key typed.
     fn handle(&mut self, ctx: &egui::Context, event: &egui::Event) -> Handled {
         if let Some(key) = pressed_key(event) {
-            let keymap = match self.mode {
-                Mode::Normal => &mut self.normal_keys,
-                Mode::Insert => &mut self.insert_keys,
-                Mode::Comment => &mut self.comment_keys,
+            let (op_count, keymap) = match self.mode {
+                Mode::Normal => (None, &mut self.normal_keys),
+                Mode::Insert => (None, &mut self.insert_keys),
+                Mode::Comment => (None, &mut self.comment_keys),
+                Mode::OperatorPending { count, .. } => (count, &mut self.operator_keys),
             };
             let pressed = keymap.press(key);
             self.key_handled = pressed.is_some();
             if let Some((action, count)) = pressed {
+                let count = match (op_count, count) {
+                    (Some(a), Some(b)) => Some(a.saturating_mul(b)),
+                    (a, b) => a.or(b),
+                };
                 return Handled::Taken(self.perform(ctx, action, count));
+            }
+            if matches!(self.mode, Mode::OperatorPending { .. }) && keymap.is_idle() {
+                self.mode = Mode::Normal;
             }
         } else if let egui::Event::Text(text) = event {
             if std::mem::take(&mut self.key_handled) {
@@ -454,8 +470,16 @@ impl TextView {
         action: Action,
         count: Option<usize>,
     ) -> Option<ViewEvent> {
+        let pending = match self.mode {
+            Mode::OperatorPending { operator, .. } => {
+                self.mode = Mode::Normal;
+                Some(operator)
+            }
+            _ => None,
+        };
         // The index of the line a count numbers from 1.
         let counted_line = count.map(|line| line - 1);
+        let raw_count = count;
         let count = count.unwrap_or(1).try_into().unwrap_or(isize::MAX);
         match action {
             Action::PrevChange => self.step_change(-1),
@@ -538,18 +562,44 @@ impl TextView {
                     self.set_mark(side, letter, position);
                 }
             }
-            Action::DeleteMark(letter) => {
+            Action::DeleteMark(letter) if pending == Some(Operator::Delete) => {
                 if let Some((side, _)) = self.cursor_position() {
                     self.marks[side].remove(&letter);
                     self.rebuild_diff();
                 }
             }
-            Action::DiffGet => self.copy_change(false),
-            Action::DiffPut => self.copy_change(true),
+            Action::DiffGet if pending == Some(Operator::Delete) => self.copy_change(false),
+            Action::DiffPut if pending == Some(Operator::Delete) => self.copy_change(true),
+            Action::DeleteMark(_) | Action::DiffGet | Action::DiffPut => {}
             Action::GoToMark(letter) => self.go_to_mark(letter, false),
             Action::GoToMarkLine(letter) => self.go_to_mark(letter, true),
+            Action::EnterOperator(operator) => {
+                if self.selection.is_some() {
+                    self.apply_operator(operator, Target::Selection, 1);
+                } else {
+                    self.mode = Mode::OperatorPending {
+                        operator,
+                        count: raw_count,
+                    };
+                }
+            }
+            Action::OperatorTarget(target) => {
+                if let Some(operator) = pending {
+                    self.apply_operator(operator, target, raw_count.unwrap_or(1));
+                }
+            }
+            Action::OperatorKey(op) => {
+                if pending == Some(op) {
+                    self.apply_operator(op, Target::Line, raw_count.unwrap_or(1));
+                }
+            }
+            Action::CancelOperator => {}
         }
         None
+    }
+
+    fn apply_operator(&mut self, operator: Operator, target: Target, count: usize) {
+        let _ = (operator, target, count);
     }
 
     /// Copies the lines of the change at the cursor, as
@@ -3682,6 +3732,49 @@ mod tests {
         assert_eq!(
             harness.state().cursor_position(),
             Some((1, Position { line: 0, column: 0 }))
+        );
+    }
+
+    #[yare::parameterized(
+        without_count = { "d", None },
+        with_count = { "2 d", Some(2) },
+        while_accumulating_motion_count = { "d 3", None },
+        while_accumulating_text_object = { "d i", None },
+    )]
+    fn pressing_d_enters_operator_pending_mode(keys: &str, count: Option<usize>) {
+        let harness = typed_in_unchanged_file(keys);
+        assert_eq!(
+            harness.state().mode,
+            Mode::OperatorPending {
+                operator: Operator::Delete,
+                count,
+            }
+        );
+        assert_eq!(harness.state().mode_label(), None);
+    }
+
+    #[test]
+    fn escape_cancels_operator_pending_without_moving_cursor() {
+        let harness = typed_in_unchanged_file("l l d Escape");
+        assert_eq!(harness.state().mode, Mode::Normal);
+        assert_eq!(
+            harness.state().cursor_position(),
+            Some((1, Position { line: 0, column: 2 }))
+        );
+    }
+
+    #[yare::parameterized(
+        unbound_key = { "d x j" },
+        counts_before_and_after_operator = { "2 d 3 x j" },
+        incomplete_sequence_then_unbound_key = { "d i x j" },
+        escape_after_partial_sequence = { "d i Escape j" },
+    )]
+    fn invalid_operator_sequence_cancels_to_normal_and_drops_counts(keys: &str) {
+        let harness = typed_in_unchanged_file(keys);
+        assert_eq!(harness.state().mode, Mode::Normal);
+        assert_eq!(
+            harness.state().cursor_position(),
+            Some((1, Position { line: 1, column: 0 }))
         );
     }
 }
