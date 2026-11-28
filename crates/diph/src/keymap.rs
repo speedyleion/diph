@@ -38,7 +38,7 @@ const MODIFIER_KEYS: [Key; 8] = [
 ];
 
 /// What a key sequence asks the view to do.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Action {
     PrevChange,
     NextChange,
@@ -99,10 +99,55 @@ pub(crate) enum Action {
     /// Moves the cursor to the first non-whitespace character on the named
     /// mark's line.
     GoToMarkLine(char),
+    /// Enters operator-pending mode, or applies the operator to an active
+    /// selection.
+    EnterOperator(Operator),
+    /// Applies the pending operator to a motion or text object.
+    OperatorTarget(Target),
+    /// Repeats an operator key, acting linewise when it matches the pending
+    /// operator.
+    OperatorKey(Operator),
+    /// Cancels operator-pending mode.
+    CancelOperator,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Operator {
+    Delete,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Motion {
+    CharLeft,
+    CharRight,
+    LineDown,
+    LineUp,
+    FirstLine,
+    LastLine,
+    FirstColumn,
+    LineStart,
+    LineEnd,
+    WordForward,
+    WordBackward,
+    WordEnd,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TextObject {
+    InnerWord,
+    AWord,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Target {
+    Line,
+    Motion(Motion),
+    TextObject(TextObject),
+    Selection,
 }
 
 /// Where insert mode puts the cursor.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum InsertAt {
     /// Before the character under the cursor.
     BeforeCursor,
@@ -114,23 +159,22 @@ pub(crate) enum InsertAt {
     LineEnd,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum OpenLineAt {
     Above,
     Below,
+}
+
+fn letter_key(c: char) -> Key {
+    Key::from_name(&c.to_uppercase().to_string()).unwrap()
 }
 
 pub(crate) fn normal_keymap() -> Keymap<Action> {
     let key = |key| KeyboardShortcut::new(Modifiers::NONE, key);
     let shift = |key| KeyboardShortcut::new(Modifiers::SHIFT, key);
     let ctrl = |key| KeyboardShortcut::new(Modifiers::CTRL, key);
-    let letter_key = |c: char| Key::from_name(&c.to_uppercase().to_string()).unwrap();
     let mark_bindings = ('a'..='z').flat_map(|c| {
         let set = (vec![key(Key::M), key(letter_key(c))], Action::SetMark(c));
-        let delete = (
-            vec![key(Key::D), key(Key::M), key(letter_key(c))],
-            Action::DeleteMark(c),
-        );
         let go_to = (
             vec![key(Key::Backtick), key(letter_key(c))],
             Action::GoToMark(c),
@@ -139,7 +183,7 @@ pub(crate) fn normal_keymap() -> Keymap<Action> {
             vec![key(Key::Quote), key(letter_key(c))],
             Action::GoToMarkLine(c),
         );
-        [set, delete, go_to, go_to_line]
+        [set, go_to, go_to_line]
     });
     Keymap::new(
         [
@@ -197,11 +241,100 @@ pub(crate) fn normal_keymap() -> Keymap<Action> {
             (vec![shift(Key::A)], Action::Insert(InsertAt::LineEnd)),
             (vec![shift(Key::O)], Action::OpenLine(OpenLineAt::Above)),
             (vec![key(Key::O)], Action::OpenLine(OpenLineAt::Below)),
-            (vec![key(Key::D), key(Key::O)], Action::DiffGet),
-            (vec![key(Key::D), key(Key::P)], Action::DiffPut),
+            (vec![key(Key::D)], Action::EnterOperator(Operator::Delete)),
         ]
         .into_iter()
         .chain(mark_bindings),
+    )
+    .with_counts()
+}
+
+pub(crate) fn operator_keymap() -> Keymap<Action> {
+    let key = |key| KeyboardShortcut::new(Modifiers::NONE, key);
+    let shift = |key| KeyboardShortcut::new(Modifiers::SHIFT, key);
+    let delete_mark_bindings =
+        ('a'..='z').map(|c| (vec![key(Key::M), key(letter_key(c))], Action::DeleteMark(c)));
+    Keymap::new(
+        [
+            (vec![key(Key::D)], Action::OperatorKey(Operator::Delete)),
+            (vec![key(Key::O)], Action::DiffGet),
+            (vec![key(Key::P)], Action::DiffPut),
+            (vec![key(Key::Escape)], Action::CancelOperator),
+            (
+                vec![key(Key::H)],
+                Action::OperatorTarget(Target::Motion(Motion::CharLeft)),
+            ),
+            (
+                vec![key(Key::ArrowLeft)],
+                Action::OperatorTarget(Target::Motion(Motion::CharLeft)),
+            ),
+            (
+                vec![key(Key::L)],
+                Action::OperatorTarget(Target::Motion(Motion::CharRight)),
+            ),
+            (
+                vec![key(Key::ArrowRight)],
+                Action::OperatorTarget(Target::Motion(Motion::CharRight)),
+            ),
+            (
+                vec![key(Key::J)],
+                Action::OperatorTarget(Target::Motion(Motion::LineDown)),
+            ),
+            (
+                vec![key(Key::ArrowDown)],
+                Action::OperatorTarget(Target::Motion(Motion::LineDown)),
+            ),
+            (
+                vec![key(Key::K)],
+                Action::OperatorTarget(Target::Motion(Motion::LineUp)),
+            ),
+            (
+                vec![key(Key::ArrowUp)],
+                Action::OperatorTarget(Target::Motion(Motion::LineUp)),
+            ),
+            (
+                vec![key(Key::G), key(Key::G)],
+                Action::OperatorTarget(Target::Motion(Motion::FirstLine)),
+            ),
+            (
+                vec![shift(Key::G)],
+                Action::OperatorTarget(Target::Motion(Motion::LastLine)),
+            ),
+            (
+                vec![key(Key::Num0)],
+                Action::OperatorTarget(Target::Motion(Motion::FirstColumn)),
+            ),
+            (
+                vec![shift(Key::Num6)],
+                Action::OperatorTarget(Target::Motion(Motion::LineStart)),
+            ),
+            (
+                vec![shift(Key::Num4)],
+                Action::OperatorTarget(Target::Motion(Motion::LineEnd)),
+            ),
+            (
+                vec![key(Key::W)],
+                Action::OperatorTarget(Target::Motion(Motion::WordForward)),
+            ),
+            (
+                vec![key(Key::B)],
+                Action::OperatorTarget(Target::Motion(Motion::WordBackward)),
+            ),
+            (
+                vec![key(Key::E)],
+                Action::OperatorTarget(Target::Motion(Motion::WordEnd)),
+            ),
+            (
+                vec![key(Key::I), key(Key::W)],
+                Action::OperatorTarget(Target::TextObject(TextObject::InnerWord)),
+            ),
+            (
+                vec![key(Key::A), key(Key::W)],
+                Action::OperatorTarget(Target::TextObject(TextObject::AWord)),
+            ),
+        ]
+        .into_iter()
+        .chain(delete_mark_bindings),
     )
     .with_counts()
 }
@@ -291,6 +424,11 @@ impl<A: Copy> Keymap<A> {
         self.pending.clear();
     }
 
+    /// Whether no count or pending key sequence is active.
+    pub fn is_idle(&self) -> bool {
+        self.count.is_none() && self.pending.is_empty()
+    }
+
     /// Adds `key` to the pending sequence, returning the action it completes
     /// and the count typed before the sequence, if any, which is never 0.
     pub fn press(&mut self, key: KeyboardShortcut) -> Option<(A, Option<usize>)> {
@@ -343,5 +481,51 @@ pub fn pressed_key(event: &Event) -> Option<KeyboardShortcut> {
             ..
         } if !MODIFIER_KEYS.contains(key) => Some(KeyboardShortcut::new(*modifiers, *key)),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn shortcut(modifiers: Modifiers, key: Key) -> KeyboardShortcut {
+        KeyboardShortcut::new(modifiers, key)
+    }
+
+    #[yare::parameterized(
+        repeat_delete_key = { vec![shortcut(Modifiers::NONE, Key::D)], Action::OperatorKey(Operator::Delete), None },
+        diff_get = { vec![shortcut(Modifiers::NONE, Key::O)], Action::DiffGet, None },
+        diff_put = { vec![shortcut(Modifiers::NONE, Key::P)], Action::DiffPut, None },
+        delete_mark = { vec![shortcut(Modifiers::NONE, Key::M), shortcut(Modifiers::NONE, Key::A)], Action::DeleteMark('a'), None },
+        inner_word = { vec![shortcut(Modifiers::NONE, Key::I), shortcut(Modifiers::NONE, Key::W)], Action::OperatorTarget(Target::TextObject(TextObject::InnerWord)), None },
+        a_word = { vec![shortcut(Modifiers::NONE, Key::A), shortcut(Modifiers::NONE, Key::W)], Action::OperatorTarget(Target::TextObject(TextObject::AWord)), None },
+        line_end = { vec![shortcut(Modifiers::SHIFT, Key::Num4)], Action::OperatorTarget(Target::Motion(Motion::LineEnd)), None },
+        zero_alone_is_first_column = { vec![shortcut(Modifiers::NONE, Key::Num0)], Action::OperatorTarget(Target::Motion(Motion::FirstColumn)), None },
+        counted_word_forward = { vec![shortcut(Modifiers::NONE, Key::Num2), shortcut(Modifiers::NONE, Key::W)], Action::OperatorTarget(Target::Motion(Motion::WordForward)), Some(2) },
+        counted_first_line = { vec![shortcut(Modifiers::NONE, Key::Num1), shortcut(Modifiers::NONE, Key::Num0), shortcut(Modifiers::NONE, Key::G), shortcut(Modifiers::NONE, Key::G)], Action::OperatorTarget(Target::Motion(Motion::FirstLine)), Some(10) },
+        escape_cancels = { vec![shortcut(Modifiers::NONE, Key::Escape)], Action::CancelOperator, None },
+    )]
+    fn operator_keymap_resolves_sequences(
+        keys: Vec<KeyboardShortcut>,
+        expected_action: Action,
+        expected_count: Option<usize>,
+    ) {
+        let mut map = operator_keymap();
+        let results: Vec<_> = keys.into_iter().map(|key| map.press(key)).collect();
+        let expected: Vec<_> = std::iter::repeat_n(None, results.len().saturating_sub(1))
+            .chain(std::iter::once(Some((expected_action, expected_count))))
+            .collect();
+        assert_eq!(results, expected);
+        assert!(map.is_idle());
+    }
+
+    #[test]
+    fn operator_keymap_stays_active_during_partial_sequence_and_clears_on_mismatch() {
+        let mut map = operator_keymap();
+        assert_eq!(map.press(shortcut(Modifiers::NONE, Key::I)), None);
+        assert!(!map.is_idle());
+
+        assert_eq!(map.press(shortcut(Modifiers::NONE, Key::X)), None);
+        assert!(map.is_idle());
     }
 }
