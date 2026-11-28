@@ -175,6 +175,41 @@ impl Buffer {
             byte,
         }
     }
+
+    /// Whether `position` is within the buffer's bounds.
+    pub fn contains(&self, position: Position) -> bool {
+        if self.lines.is_empty() {
+            return position == Position { line: 0, column: 0 };
+        }
+        if position.line >= self.lines.len() {
+            return false;
+        }
+        let line = &self.lines[position.line];
+        position.column <= line.chars().count()
+    }
+
+    /// Clamp `position` to the buffer's bounds.
+    pub fn clamp(&self, position: Position) -> Position {
+        if self.lines.is_empty() {
+            return Position { line: 0, column: 0 };
+        }
+        let last_line = self.lines.len().saturating_sub(1);
+        let line_idx = position.line.min(last_line);
+        let line = &self.lines[line_idx];
+
+        let last_col = line.chars().count().saturating_sub(1);
+        let col_idx = if position.line > last_line {
+            // If the original position was past the last line, clamp to end of last line
+            last_col
+        } else {
+            position.column.min(last_col)
+        };
+
+        Position {
+            line: line_idx,
+            column: col_idx,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -325,5 +360,83 @@ mod tests {
         let mut buffer = Buffer::new("a\r\nb\r\n");
         buffer.insert(Position { line: 0, column: 1 }, "\nc");
         assert_eq!(buffer.text(), "a\r\nc\r\nb\r\n");
+    }
+
+    #[yare::parameterized(
+        empty_buffer_returns_origin = { "", Position { line: 0, column: 0 }, Position { line: 0, column: 0 } },
+        empty_buffer_with_non_zero_position = { "", Position { line: 5, column: 10 }, Position { line: 0, column: 0 } },
+        in_bounds_stays_same = { "hello\n", Position { line: 0, column: 2 }, Position { line: 0, column: 2 } },
+        at_end_of_line_stays_same = { "hello\n", Position { line: 0, column: 4 }, Position { line: 0, column: 4 } },
+        past_end_of_line_clamps_to_end = { "hello\n", Position { line: 0, column: 10 }, Position { line: 0, column: 4 } },
+        past_last_line_clamps_to_end_of_buffer = { "hello\nworld\n", Position { line: 5, column: 0 }, Position { line: 1, column: 4 } },
+        past_last_line_and_column_clamps_to_end = { "hello\nworld\n", Position { line: 5, column: 10 }, Position { line: 1, column: 4 } },
+        at_last_line_and_column_stays_same = { "hello\nworld\n", Position { line: 1, column: 4 }, Position { line: 1, column: 4 } },
+        at_last_line_past_column_clamps = { "hello\nworld\n", Position { line: 1, column: 100 }, Position { line: 1, column: 4 } },
+        multi_byte_chars = { "héllo\n", Position { line: 0, column: 10 }, Position { line: 0, column: 4 } },
+        multi_byte_at_end = { "héllo\n", Position { line: 0, column: 4 }, Position { line: 0, column: 4 } },
+    )]
+    fn clamp(text: &str, position: Position, expected: Position) {
+        let buffer = Buffer::new(text);
+        assert_eq!(buffer.clamp(position), expected);
+    }
+
+    #[yare::parameterized(
+        empty_buffer_origin = { "", Position { line: 0, column: 0 }, true },
+        empty_buffer_non_origin = { "", Position { line: 0, column: 1 }, false },
+        empty_buffer_past_line = { "", Position { line: 1, column: 0 }, false },
+        in_bounds_middle = { "hello\n", Position { line: 0, column: 2 }, true },
+        in_bounds_at_end = { "hello\n", Position { line: 0, column: 5 }, true },
+        in_bounds_past_end = { "hello\n", Position { line: 0, column: 6 }, false },
+        past_last_line = { "hello\nworld\n", Position { line: 5, column: 0 }, false },
+        on_last_line = { "hello\nworld\n", Position { line: 1, column: 0 }, true },
+        on_last_line_at_end = { "hello\nworld\n", Position { line: 1, column: 5 }, true },
+        on_last_line_past_end = { "hello\nworld\n", Position { line: 1, column: 6 }, false },
+        multi_byte_in_bounds = { "héllo\n", Position { line: 0, column: 2 }, true },
+        multi_byte_at_end = { "héllo\n", Position { line: 0, column: 5 }, true },
+        multi_byte_past_end = { "héllo\n", Position { line: 0, column: 6 }, false },
+    )]
+    fn contains(text: &str, position: Position, expected: bool) {
+        let buffer = Buffer::new(text);
+        assert_eq!(buffer.contains(position), expected);
+    }
+
+    #[test]
+    fn clamp_is_consistent_with_contains() {
+        let test_cases = [
+            ("", Position { line: 0, column: 0 }),
+            (
+                "",
+                Position {
+                    line: 5,
+                    column: 10,
+                },
+            ),
+            ("hello\n", Position { line: 0, column: 2 }),
+            (
+                "hello\n",
+                Position {
+                    line: 0,
+                    column: 10,
+                },
+            ),
+            ("hello\nworld\n", Position { line: 5, column: 0 }),
+            (
+                "hello\nworld\n",
+                Position {
+                    line: 5,
+                    column: 10,
+                },
+            ),
+        ];
+        for (text, pos) in test_cases {
+            let buffer = Buffer::new(text);
+            let clamped = buffer.clamp(pos);
+            assert!(
+                buffer.contains(clamped),
+                "clamp({:?}) = {:?} should be contained in buffer",
+                pos,
+                clamped
+            );
+        }
     }
 }

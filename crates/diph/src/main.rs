@@ -8,6 +8,7 @@ mod review;
 mod selection;
 mod text_view;
 mod view_rows;
+mod word;
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};

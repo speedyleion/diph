@@ -77,6 +77,10 @@ crate descriptions, and `--help` text: describe what the code does now.
   the call site. Extract a helper when the logic is reused, has multiple
   meaningful steps, or its name clarifies a domain rule that isn't already
   clear from the expression.
+- Use checked indexing or existing bounds helpers (`.get()`,
+  `.split_at_checked()`, `checked_sub`, `Buffer::clamp`) rather than
+  raw `slice[i]` indexing or ad-hoc clamping, so empty or out-of-bounds
+  inputs cannot panic.
 
 ## Shell commands
 
@@ -92,3 +96,7 @@ crate descriptions, and `--help` text: describe what the code does now.
   test, naming each case for what it shows.
 - Keep the tests of one behavior together. Add tests for a new behavior
   after the existing tests, not between tests of another behavior.
+- Cover boundary and degenerate inputs in `yare::parameterized` tests
+  for functions over positions, ranges, or counts: empty inputs, start
+  and end elements, counts of 0 or past the end, out-of-bounds
+  positions, and multi-byte characters.
